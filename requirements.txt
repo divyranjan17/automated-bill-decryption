@@ -1,1 +1,14 @@
-# Project dependencies
+fastapi
+uvicorn
+langchain
+openai
+pikepdf
+PyPDF2
+python-dotenv
+click
+pydantic
+boto3
+google-auth
+google-auth-oauthlib
+google-api-python-client
+google-auth-httplib2

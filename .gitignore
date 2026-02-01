@@ -2,3 +2,9 @@ venv/
 .env.example
 .cursor/
 assets/
+poc/
+bill_decryption_project_plan.pdf
+hdfc_output.json
+Updated_Project_Plan.pdf
+credentials.json
+token.json
