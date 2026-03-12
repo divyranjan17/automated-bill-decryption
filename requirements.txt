@@ -2,6 +2,7 @@ fastapi
 uvicorn
 langchain
 openai
+pytest
 pikepdf
 PyPDF2
 python-dotenv
