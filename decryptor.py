@@ -23,8 +23,8 @@ def decrypt_pdf(input_path: str, password: str, output_path: str) -> dict:
     Returns:
         A dict with keys:
             - status: "success" | "failure"
-            - output_path: str | None
-            - failure_reason: str | None
+            - output_path: str (present only on success)
+            - failure_reason: one of FILE_NOT_FOUND | PDF_NOT_ENCRYPTED| WRONG_PASSWORD (present only on failure)
             - attempts: int
     """
     if not os.path.exists(input_path):
@@ -32,7 +32,6 @@ def decrypt_pdf(input_path: str, password: str, output_path: str) -> dict:
         return {
             "status": "failure",
             "failure_reason": "FILE_NOT_FOUND",
-            "output_path": None,
             "attempts": 0,
         }
 
@@ -43,8 +42,7 @@ def decrypt_pdf(input_path: str, password: str, output_path: str) -> dict:
             return {
                 "status": "failure",
                 "failure_reason": "PDF_NOT_ENCRYPTED",
-                "output_path": None,
-                "attempts": 0,
+                "attempts": 1,
             }
     except pikepdf.PasswordError:
         pass
@@ -59,7 +57,6 @@ def decrypt_pdf(input_path: str, password: str, output_path: str) -> dict:
             return {
                 "status": "success",
                 "output_path": output_path,
-                "failure_reason": None,
                 "attempts": 1,
             }
     except pikepdf.PasswordError:
@@ -67,6 +64,5 @@ def decrypt_pdf(input_path: str, password: str, output_path: str) -> dict:
         return {
             "status": "failure",
             "failure_reason": "WRONG_PASSWORD",
-            "output_path": None,
             "attempts": 1,
         }
