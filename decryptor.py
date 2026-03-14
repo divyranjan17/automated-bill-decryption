@@ -5,6 +5,7 @@ and returns structured status metadata. It does not generate passwords,
 does not retry with multiple candidates, and makes a single attempt only.
 """
 
+from src.constants.failure_reasons import FailureReason
 import os
 import logging
 import pikepdf
@@ -31,7 +32,7 @@ def decrypt_pdf(input_path: str, password: str, output_path: str) -> dict:
         logger.error(f"Input file not found: {input_path}")
         return {
             "status": "failure",
-            "failure_reason": "FILE_NOT_FOUND",
+            "failure_reason": FailureReason.FILE_NOT_FOUND,
             "attempts": 0,
         }
 
@@ -41,7 +42,7 @@ def decrypt_pdf(input_path: str, password: str, output_path: str) -> dict:
             logger.info(f"PDF at {input_path} is not encrypted. Skipping.")
             return {
                 "status": "failure",
-                "failure_reason": "PDF_NOT_ENCRYPTED",
+                "failure_reason": FailureReason.PDF_NOT_ENCRYPTED,
                 "attempts": 1,
             }
     except pikepdf.PasswordError:
@@ -63,6 +64,6 @@ def decrypt_pdf(input_path: str, password: str, output_path: str) -> dict:
         logger.error(f"Incorrect password for: {input_path}")
         return {
             "status": "failure",
-            "failure_reason": "WRONG_PASSWORD",
+            "failure_reason": FailureReason.WRONG_PASSWORD,
             "attempts": 1,
         }
