@@ -31,8 +31,8 @@ def decrypt_pdf(input_path: str, password: str, output_path: str) -> dict:
     if not os.path.exists(input_path):
         logger.error(f"Input file not found: {input_path}")
         return {
-            "status": "failure",
-            "failure_reason": FailureReason.FILE_NOT_FOUND,
+            "status": "failure", # TODO: should be an Enum
+            "failure_reason": FailureReason.FILE_NOT_FOUND.value,
             "attempts": 0,
         }
 
@@ -42,7 +42,7 @@ def decrypt_pdf(input_path: str, password: str, output_path: str) -> dict:
             logger.info(f"PDF at {input_path} is not encrypted. Skipping.")
             return {
                 "status": "failure",
-                "failure_reason": FailureReason.PDF_NOT_ENCRYPTED,
+                "failure_reason": FailureReason.PDF_NOT_ENCRYPTED.value,
                 "attempts": 1,
             }
     except pikepdf.PasswordError:
@@ -64,6 +64,6 @@ def decrypt_pdf(input_path: str, password: str, output_path: str) -> dict:
         logger.error(f"Incorrect password for: {input_path}")
         return {
             "status": "failure",
-            "failure_reason": FailureReason.WRONG_PASSWORD,
+            "failure_reason": FailureReason.WRONG_PASSWORD.value,
             "attempts": 1,
         }
