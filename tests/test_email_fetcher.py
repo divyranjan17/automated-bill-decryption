@@ -1,0 +1,350 @@
+import importlib
+import sys
+from datetime import datetime, timezone
+from email.message import EmailMessage
+from pathlib import Path
+from unittest.mock import MagicMock
+
+import pytest
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+
+class FakeIMAP:
+    def __init__(self, search_uids=b"", fetch_map=None):
+        self.search_uids = search_uids
+        self.fetch_map = fetch_map or {}
+        self.uid = MagicMock(side_effect=self._uid)
+        self.login = MagicMock()
+        self.select = MagicMock(return_value=("OK", [b"1"]))
+        self.logout = MagicMock()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.logout()
+        return False
+
+    def _uid(self, command, *args):
+        if command == "SEARCH":
+            return "OK", [self.search_uids]
+        if command == "FETCH":
+            uid = args[0]
+            return "OK", [(b"1 (RFC822 {1})", self.fetch_map[uid])]
+        if command == "STORE":
+            return "OK", [b"stored"]
+        raise AssertionError(f"Unexpected IMAP UID command: {command}")
+
+
+def _build_plain_text_message():
+    message = EmailMessage()
+    message["Message-ID"] = "<abc123@example.com>"
+    message["From"] = "Billing Team <billing@example.com>"
+    message["Subject"] = "Statement"
+    message.set_content("Password is your DOB.")
+    message.add_attachment(
+        b"%PDF-1.4...",
+        maintype="application",
+        subtype="pdf",
+        filename="statement.pdf",
+    )
+    return message.as_bytes()
+
+
+def _build_html_only_message():
+    message = EmailMessage()
+    message["Message-ID"] = "<html@example.com>"
+    message["From"] = "billing@example.com"
+    message["Subject"] = "March bill"
+    message.add_alternative(
+        "<html><body><p>Pay before <b>due date</b></p></body></html>",
+        subtype="html",
+    )
+    message.add_attachment(
+        b"%PDF-1.4...",
+        maintype="application",
+        subtype="pdf",
+        filename="bill.pdf",
+    )
+    return message.as_bytes()
+
+
+def _build_missing_message_id():
+    message = EmailMessage()
+    message["From"] = "billing@example.com"
+    message["Subject"] = "Missing id"
+    message.set_content("Your bill is attached.")
+    return message.as_bytes()
+
+
+def _load_module(
+    monkeypatch,
+    fake_imap,
+    *,
+    checkpoint_path=None,
+    max_emails_per_run="50",
+    lookback_cap_days="365",
+):
+    monkeypatch.setenv("EMAIL_IMAP_HOST", "imap.gmail.com")
+    monkeypatch.setenv("EMAIL_USERNAME", "user@example.com")
+    monkeypatch.setenv("EMAIL_APP_PASSWORD", "app-password")
+    monkeypatch.setenv("EMAIL_MAILBOX", "INBOX")
+    monkeypatch.setenv("EMAIL_PROCESSED_LABEL", "bill-processed")
+    monkeypatch.setenv("MAX_EMAILS_PER_RUN", max_emails_per_run)
+    monkeypatch.setenv("EMAIL_LOOKBACK_CAP_DAYS", lookback_cap_days)
+    if checkpoint_path is not None:
+        monkeypatch.setenv("EMAIL_CHECKPOINT_PATH", str(checkpoint_path))
+
+    sys.modules.pop("email_fetcher", None)
+    module = importlib.import_module("email_fetcher")
+    monkeypatch.setattr(module.imaplib, "IMAP4_SSL", lambda host: fake_imap)
+    return module
+
+
+def test_fetch_emails_returns_normalized_messages(monkeypatch):
+    fake_imap = FakeIMAP(
+        search_uids=b"101",
+        fetch_map={"101": _build_plain_text_message()},
+    )
+    module = _load_module(monkeypatch, fake_imap)
+
+    messages = module.fetch_emails()
+
+    assert messages == [
+        {
+            "uid": "101",
+            "message_id": "<abc123@example.com>",
+            "sender": "billing@example.com",
+            "subject": "Statement",
+            "body_text": "Password is your DOB.",
+            "attachments": [b"%PDF-1.4..."],
+        }
+    ]
+
+
+def test_fetch_emails_contract_includes_message_id(monkeypatch):
+    fake_imap = FakeIMAP(
+        search_uids=b"101",
+        fetch_map={"101": _build_plain_text_message()},
+    )
+    module = _load_module(monkeypatch, fake_imap)
+
+    message = module.fetch_emails()[0]
+
+    assert set(message) == {
+        "uid",
+        "message_id",
+        "sender",
+        "subject",
+        "body_text",
+        "attachments",
+    }
+
+
+def test_fetch_emails_searches_for_unprocessed_messages(monkeypatch):
+    fake_imap = FakeIMAP(
+        search_uids=b"101",
+        fetch_map={"101": _build_plain_text_message()},
+    )
+    module = _load_module(monkeypatch, fake_imap, lookback_cap_days="30")
+    monkeypatch.setattr(
+        module,
+        "_utc_now",
+        lambda: datetime(2026, 3, 17, 12, 0, tzinfo=timezone.utc),
+    )
+    monkeypatch.setattr(module, "_read_checkpoint", lambda *_: None)
+
+    module.fetch_emails()
+
+    fake_imap.login.assert_called_once_with("user@example.com", "app-password")
+    fake_imap.select.assert_called_once_with("INBOX")
+    fake_imap.uid.assert_any_call(
+        "SEARCH",
+        "X-GM-RAW",
+        '"after:2026/02/15 -label:bill-processed"',
+    )
+
+
+def test_fetch_emails_uses_existing_checkpoint_for_incremental_search(
+    monkeypatch, tmp_path
+):
+    fake_imap = FakeIMAP(
+        search_uids=b"101",
+        fetch_map={"101": _build_plain_text_message()},
+    )
+    checkpoint_path = tmp_path / "data" / "email_fetch_checkpoint.txt"
+    checkpoint_path.parent.mkdir()
+    checkpoint_path.write_text("2026-03-10T09:30:00+00:00", encoding="utf-8")
+    module = _load_module(
+        monkeypatch,
+        fake_imap,
+        checkpoint_path=checkpoint_path,
+    )
+
+    module.fetch_emails()
+
+    fake_imap.uid.assert_any_call(
+        "SEARCH",
+        "X-GM-RAW",
+        '"after:2026/03/10 -label:bill-processed"',
+    )
+
+
+def test_fetch_emails_limits_processing_to_max_emails_per_run(
+    monkeypatch,
+):
+    fake_imap = FakeIMAP(
+        search_uids=b"101 102 103",
+        fetch_map={
+            "101": _build_plain_text_message(),
+            "102": _build_plain_text_message(),
+            "103": _build_plain_text_message(),
+        },
+    )
+    module = _load_module(
+        monkeypatch,
+        fake_imap,
+        max_emails_per_run="2",
+    )
+
+    messages = module.fetch_emails()
+
+    assert [message["uid"] for message in messages] == ["101", "102"]
+    fetch_calls = [
+        call for call in fake_imap.uid.call_args_list if call.args[0] == "FETCH"
+    ]
+    assert [call.args[1] for call in fetch_calls] == ["101", "102"]
+
+
+def test_fetch_emails_does_not_update_checkpoint_during_ingestion(
+    monkeypatch, tmp_path
+):
+    fake_imap = FakeIMAP(
+        search_uids=b"101",
+        fetch_map={"101": _build_plain_text_message()},
+    )
+    checkpoint_path = tmp_path / "data" / "email_fetch_checkpoint.txt"
+    module = _load_module(
+        monkeypatch,
+        fake_imap,
+        checkpoint_path=checkpoint_path,
+    )
+
+    module.fetch_emails()
+
+    assert not checkpoint_path.exists()
+
+
+def test_fetch_emails_extracts_sender_subject_body_and_attachments(monkeypatch):
+    fake_imap = FakeIMAP(
+        search_uids=b"101",
+        fetch_map={"101": _build_plain_text_message()},
+    )
+    module = _load_module(monkeypatch, fake_imap)
+
+    result = module.fetch_emails()
+
+    assert result[0]["message_id"] == "<abc123@example.com>"
+    assert result[0]["sender"] == "billing@example.com"
+    assert result[0]["subject"] == "Statement"
+    assert result[0]["body_text"] == "Password is your DOB."
+    assert result[0]["attachments"] == [b"%PDF-1.4..."]
+
+
+def test_fetch_emails_falls_back_to_html_body_text(monkeypatch):
+    fake_imap = FakeIMAP(
+        search_uids=b"202",
+        fetch_map={"202": _build_html_only_message()},
+    )
+    module = _load_module(monkeypatch, fake_imap)
+
+    result = module.fetch_emails()
+
+    assert result[0]["body_text"] == "Pay before due date"
+
+
+def test_fetch_emails_logs_and_skips_messages_missing_message_id(
+    monkeypatch, caplog
+):
+    fake_imap = FakeIMAP(
+        search_uids=b"303",
+        fetch_map={"303": _build_missing_message_id()},
+    )
+    module = _load_module(monkeypatch, fake_imap)
+
+    result = module.fetch_emails()
+
+    assert result == []
+    assert "message-id" in caplog.text.lower()
+
+
+def test_fetch_emails_logs_and_skips_malformed_messages(
+    monkeypatch, caplog
+):
+    fake_imap = FakeIMAP(
+        search_uids=b"404",
+        fetch_map={"404": _build_plain_text_message()},
+    )
+    module = _load_module(monkeypatch, fake_imap)
+    monkeypatch.setattr(
+        module.email,
+        "message_from_bytes",
+        lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("boom")),
+    )
+
+    result = module.fetch_emails()
+
+    assert result == []
+    assert "failed to parse" in caplog.text.lower()
+
+
+def test_fetch_emails_does_not_mark_messages_processed_during_ingestion(
+    monkeypatch,
+):
+    fake_imap = FakeIMAP(
+        search_uids=b"101",
+        fetch_map={"101": _build_plain_text_message()},
+    )
+    module = _load_module(monkeypatch, fake_imap)
+
+    module.fetch_emails()
+
+    assert not any(
+        call.args[0] == "STORE" for call in fake_imap.uid.call_args_list
+    )
+
+
+def test_mark_email_processed_applies_bill_processed_label(monkeypatch):
+    fake_imap = FakeIMAP()
+    module = _load_module(monkeypatch, fake_imap)
+
+    module.mark_email_processed("101")
+
+    fake_imap.uid.assert_any_call(
+        "STORE",
+        "101",
+        "+X-GM-LABELS",
+        "(bill-processed)",
+    )
+
+
+def test_commit_fetch_checkpoint_writes_timestamp_to_data_path(
+    monkeypatch, tmp_path
+):
+    fake_imap = FakeIMAP()
+    checkpoint_path = tmp_path / "data" / "email_fetch_checkpoint.txt"
+    module = _load_module(
+        monkeypatch,
+        fake_imap,
+        checkpoint_path=checkpoint_path,
+    )
+    timestamp = datetime(2026, 3, 17, 12, 30, tzinfo=timezone.utc)
+
+    module.commit_fetch_checkpoint(timestamp)
+
+    assert checkpoint_path.read_text(encoding="utf-8").strip() == (
+        "2026-03-17T12:30:00+00:00"
+    )
