@@ -36,7 +36,7 @@ REQUIRED_KEYS = {
     "sender",
     "subject",
     "body_text",
-    "attachments",
+    "pdf_attachments",
 }
 
 
@@ -83,16 +83,45 @@ def fetch_emails() -> list[dict]:
             parsed = _fetch_and_parse_message(client, uid)
             if parsed is not None:
                 logger.info(
-                    "Successfully parsed uid=%s | sender=%s | subject=%s | attachments=%s",
+                    "Successfully parsed uid=%s | sender=%s | subject=%s | pdf_attachments=%s",
                     uid,
                     parsed["sender"],
                     parsed["subject"],
-                    len(parsed["attachments"]),
+                    len(parsed["pdf_attachments"]),
                 )
                 messages.append(parsed)
             else:
                 logger.warning(f"Skipping uid={uid} - failed to parse")
     return messages
+
+
+def extract_pdf_attachments(raw_parts: list[Message]) -> list[bytes]:
+    """Filter and extract PDF payloads from a list of message parts."""
+    pdf_attachments: list[bytes] = []
+    for part in raw_parts:
+        mime_type = part.get_content_type()
+        filename = (part.get_filename() or "").lower()
+
+        is_pdf = (
+            mime_type == "application/pdf"
+            or (
+                mime_type in (
+                    "application/octet-stream",
+                    "application/download",
+                    "application/force-download",
+                )
+                and filename.endswith(".pdf")
+            )
+        )
+
+        if not is_pdf:
+            continue
+
+        payload = part.get_payload(decode=True)
+        if payload:
+            pdf_attachments.append(payload)
+
+    return pdf_attachments
 
 
 def mark_email_processed(uid: str) -> None:
@@ -272,7 +301,8 @@ def _parse_message(uid: str, raw_bytes: bytes) -> dict:
     sender = parseaddr(_clean_header(message.get("From")))[1]
     subject = _decode_header_value(message.get("Subject"))
     body_text = _extract_body_text(message)
-    attachments = _extract_attachments(message, uid)
+    attachment_parts = _get_attachment_parts(message)
+    pdf_attachments = extract_pdf_attachments(attachment_parts)
 
     return {
         "uid": uid,
@@ -280,7 +310,7 @@ def _parse_message(uid: str, raw_bytes: bytes) -> dict:
         "sender": sender,
         "subject": subject,
         "body_text": body_text,
-        "attachments": attachments,
+        "pdf_attachments": pdf_attachments,
     }
 
 
@@ -331,8 +361,9 @@ def _html_to_text(value: str) -> str:
     return text.strip()
 
 
-def _extract_attachments(message: Message, uid: str) -> list[bytes]:
-    attachments: list[bytes] = []
+def _get_attachment_parts(message: Message) -> list[Message]:
+    """Extract all message parts that are designated as attachments."""
+    attachments: list[Message] = []
     parts = message.walk() if message.is_multipart() else [message]
 
     for part in parts:
@@ -342,11 +373,7 @@ def _extract_attachments(message: Message, uid: str) -> list[bytes]:
         if part.get_content_disposition() != "attachment":
             continue
 
-        payload = part.get_payload(decode=True)
-        if not payload:
-            logger.error("Skipping empty attachment for uid=%s", uid)
-            continue
-        attachments.append(payload)
+        attachments.append(part)
 
     return attachments
 
@@ -354,8 +381,11 @@ def _extract_attachments(message: Message, uid: str) -> list[bytes]:
 def _is_valid_normalized_email(message: dict) -> bool:
     if set(message) != REQUIRED_KEYS:
         return False
-    if not all(isinstance(message[key], str) for key in REQUIRED_KEYS - {"attachments"}):
+    if not all(
+        isinstance(message[key], str)
+        for key in REQUIRED_KEYS - {"pdf_attachments"}
+    ):
         return False
-    if not isinstance(message["attachments"], list):
+    if not isinstance(message["pdf_attachments"], list):
         return False
-    return all(isinstance(item, bytes) for item in message["attachments"])
+    return all(isinstance(item, bytes) for item in message["pdf_attachments"])

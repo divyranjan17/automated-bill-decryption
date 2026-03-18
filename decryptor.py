@@ -5,12 +5,29 @@ and returns structured status metadata. It does not generate passwords,
 does not retry with multiple candidates, and makes a single attempt only.
 """
 
-from src.constants.failure_reasons import FailureReason
 import os
 import logging
+import io
 import pikepdf
+from src.constants.failure_reasons import FailureReason
 
 logger = logging.getLogger(__name__)
+
+
+def is_encrypted(pdf_bytes: bytes) -> bool:
+    """Check if a PDF is password-protected using pikepdf.
+
+    Args:
+        pdf_bytes: The raw bytes of the PDF file.
+
+    Returns:
+        True if the PDF is encrypted, False otherwise.
+    """
+    try:
+        with pikepdf.open(io.BytesIO(pdf_bytes)):
+            return False
+    except pikepdf.PasswordError:
+        return True
 
 
 def decrypt_pdf(input_path: str, password: str, output_path: str) -> dict:
@@ -31,26 +48,31 @@ def decrypt_pdf(input_path: str, password: str, output_path: str) -> dict:
     if not os.path.exists(input_path):
         logger.error(f"Input file not found: {input_path}")
         return {
-            "status": "failure", # TODO: should be an Enum
+            "status": "failure",
             "failure_reason": FailureReason.FILE_NOT_FOUND.value,
             "attempts": 0,
         }
 
-    logger.info(f"Checking encryption status for: {input_path}")
     try:
-        with pikepdf.open(input_path):
-            logger.info(f"PDF at {input_path} is not encrypted. Skipping.")
-            return {
-                "status": "failure",
-                "failure_reason": FailureReason.PDF_NOT_ENCRYPTED.value,
-                "attempts": 1,
-            }
-    except pikepdf.PasswordError:
-        pass
+        with open(input_path, "rb") as f:
+            pdf_bytes = f.read()
+    except Exception as exc:
+        logger.error(f"Failed to read input file {input_path}: {exc}")
+        raise
+
+    logger.info(f"Checking encryption status for: {input_path}")
+    if not is_encrypted(pdf_bytes):
+        logger.info(f"PDF at {input_path} is not encrypted. Skipping.")
+        return {
+            "status": "failure",
+            "failure_reason": FailureReason.PDF_NOT_ENCRYPTED.value,
+            "attempts": 1,
+        }
 
     logger.info(f"Attempting decryption: {input_path}")
     try:
-        with pikepdf.open(input_path, password=password) as pdf:
+        # Use io.BytesIO(pdf_bytes) to avoid re-reading from disk
+        with pikepdf.open(io.BytesIO(pdf_bytes), password=password) as pdf:
             pdf.save(output_path)
             logger.info(
                 f"Decrypted successfully: {input_path} -> {output_path}"
