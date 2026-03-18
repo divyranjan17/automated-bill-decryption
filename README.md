@@ -12,9 +12,9 @@ A backend-first GenAI-powered agent that automates downloading, decrypting, and 
 3. Create a Gmail app password for mail access.
 4. Create the `bill-processed` Gmail label.
 5. Export these environment variables before running the ingestion pipeline:
-   - `EMAIL_FETCHER_IMAP_HOST`
-   - `EMAIL_FETCHER_USERNAME`
-   - `EMAIL_FETCHER_APP_PASSWORD`
-   - `EMAIL_FETCHER_MAILBOX` (optional, defaults to `INBOX`)
-   - `EMAIL_FETCHER_PROCESSED_LABEL` (optional, defaults to `bill-processed`)
+   - `EMAIL_IMAP_HOST`
+   - `EMAIL_USERNAME`
+   - `EMAIL_APP_PASSWORD`
+   - `EMAIL_MAILBOX` (optional, defaults to `INBOX`)
+   - `EMAIL_PROCESSED_LABEL` (optional, defaults to `bill-processed`)
 6. Call `mark_email_processed(uid)` only after a message completes the full success path.
