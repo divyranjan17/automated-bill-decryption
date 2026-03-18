@@ -120,7 +120,7 @@ def test_fetch_emails_returns_normalized_messages(monkeypatch):
             "sender": "billing@example.com",
             "subject": "Statement",
             "body_text": "Password is your DOB.",
-            "attachments": [b"%PDF-1.4..."],
+            "pdf_attachments": [b"%PDF-1.4..."],
         }
     ]
 
@@ -140,7 +140,7 @@ def test_fetch_emails_contract_includes_message_id(monkeypatch):
         "sender",
         "subject",
         "body_text",
-        "attachments",
+        "pdf_attachments",
     }
 
 
@@ -251,7 +251,7 @@ def test_fetch_emails_extracts_sender_subject_body_and_attachments(monkeypatch):
     assert result[0]["sender"] == "billing@example.com"
     assert result[0]["subject"] == "Statement"
     assert result[0]["body_text"] == "Password is your DOB."
-    assert result[0]["attachments"] == [b"%PDF-1.4..."]
+    assert result[0]["pdf_attachments"] == [b"%PDF-1.4..."]
 
 
 def test_fetch_emails_falls_back_to_html_body_text(monkeypatch):
@@ -329,6 +329,142 @@ def test_mark_email_processed_applies_bill_processed_label(monkeypatch):
         "+X-GM-LABELS",
         "(bill-processed)",
     )
+
+
+def test_extract_pdf_attachments_returns_only_application_pdf_parts(monkeypatch):
+    fake_imap = FakeIMAP()
+    module = _load_module(monkeypatch, fake_imap)
+
+    message = EmailMessage()
+    message.add_attachment(
+        b"%PDF-1.4...",
+        maintype="application",
+        subtype="pdf",
+        filename="bill.pdf",
+    )
+    message.add_attachment(
+        b"hello",
+        maintype="text",
+        subtype="plain",
+        filename="readme.txt",
+    )
+
+    pdf_part, txt_part = list(message.iter_attachments())
+
+    result = module.extract_pdf_attachments([pdf_part, txt_part])
+    assert result == [b"%PDF-1.4..."]
+
+
+def test_extract_pdf_attachments_uses_get_content_for_pdf_parts(monkeypatch):
+    fake_imap = FakeIMAP()
+    module = _load_module(monkeypatch, fake_imap)
+
+    class FakePdfPart:
+        def get_content_type(self):
+            return "application/pdf"
+
+        def get_filename(self):
+            return "bill.pdf"
+
+        def get_content(self):
+            return b"%PDF-1.7..."
+
+        def get_payload(self, decode=False):
+            raise AssertionError("legacy get_payload should not be used")
+
+    result = module.extract_pdf_attachments([FakePdfPart()])
+
+    assert result == [b"%PDF-1.7..."]
+
+
+def test_extract_pdf_attachments_octet_stream_mime_and_pdf_extension_returns_bytes(monkeypatch):
+    fake_imap = FakeIMAP()
+    module = _load_module(monkeypatch, fake_imap)
+
+    message = EmailMessage()
+    message.add_attachment(
+        b"%PDF-1.4...",
+        maintype="application",
+        subtype="octet-stream",
+        filename="bill.pdf",
+    )
+    pdf_part = next(message.iter_attachments())
+
+    result = module.extract_pdf_attachments([pdf_part])
+    assert result == [b"%PDF-1.4..."]
+
+
+def test_extract_pdf_attachments_returns_empty_list_when_no_pdfs_exist(monkeypatch):
+    fake_imap = FakeIMAP()
+    module = _load_module(monkeypatch, fake_imap)
+    
+    from email.message import Message
+    txt_part = Message()
+    txt_part.set_type("text/plain")
+    txt_part.add_header("Content-Disposition", "attachment", filename="readme.txt")
+    txt_part.set_payload(b"hello")
+    
+    result = module.extract_pdf_attachments([txt_part])
+    assert result == []
+
+
+def test_parse_message_uses_iter_attachments_instead_of_legacy_attachment_helper(
+    monkeypatch,
+):
+    fake_imap = FakeIMAP()
+    module = _load_module(monkeypatch, fake_imap)
+    iter_attachments_called = False
+
+    attachment_part = EmailMessage()
+    attachment_part.add_attachment(
+        b"%PDF-1.4...",
+        maintype="application",
+        subtype="pdf",
+        filename="statement.pdf",
+    )
+
+    class FakeMessage:
+        def get(self, key):
+            headers = {
+                "Message-ID": "<iter@example.com>",
+                "From": "Billing Team <billing@example.com>",
+                "Subject": "Statement",
+            }
+            return headers.get(key)
+
+        def iter_attachments(self):
+            nonlocal iter_attachments_called
+            iter_attachments_called = True
+            return [next(attachment_part.iter_attachments())]
+
+    monkeypatch.setattr(
+        module.email,
+        "message_from_bytes",
+        lambda *args, **kwargs: FakeMessage(),
+    )
+    monkeypatch.setattr(
+        module,
+        "_extract_body_text",
+        lambda message: "Password is your DOB.",
+    )
+
+    parsed = module._parse_message("101", b"raw")
+
+    assert iter_attachments_called is True
+    assert parsed["pdf_attachments"] == [b"%PDF-1.4..."]
+
+
+def test_fetch_emails_returns_pdf_attachments_contract(monkeypatch):
+    fake_imap = FakeIMAP(
+        search_uids=b"101",
+        fetch_map={"101": _build_plain_text_message()},
+    )
+    module = _load_module(monkeypatch, fake_imap)
+
+    messages = module.fetch_emails()
+    assert "pdf_attachments" in messages[0]
+    assert messages[0]["pdf_attachments"] == [b"%PDF-1.4..."]
+    assert "attachments" not in messages[0]
 
 
 def test_commit_fetch_checkpoint_writes_timestamp_to_data_path(

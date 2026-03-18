@@ -1,5 +1,6 @@
 import importlib
 import inspect
+import io
 from pathlib import Path
 import sys
 import types
@@ -37,8 +38,9 @@ class _FakePDF:
 def _import_decryptor_with_fake_pikepdf(open_impl):
     """Return the decryptor module with pikepdf stubbed out.
 
-    os.path.exists is patched to always return True so that the
-    file-existence guard does not block tests that use synthetic paths.
+    os.path.exists is patched to always return True and builtins.open
+    is mocked to return synthetic bytes so that the file-existence 
+    and read guards do not block tests that use synthetic paths.
     """
     fake_pikepdf = types.SimpleNamespace(
         PasswordError=_FakePasswordError,
@@ -47,9 +49,16 @@ def _import_decryptor_with_fake_pikepdf(open_impl):
     sys.modules["pikepdf"] = fake_pikepdf
     sys.modules.pop("decryptor", None)
     module = importlib.import_module("decryptor")
-    patcher = patch.object(module.os.path, "exists", return_value=True)
-    patcher.start()
-    return module, patcher
+    
+    exists_patcher = patch.object(module.os.path, "exists", return_value=True)
+    exists_patcher.start()
+    
+    # Mock builtins.open to return b"%PDF-1.4..." by default
+    from unittest.mock import mock_open
+    open_patcher = patch("builtins.open", mock_open(read_data=b"%PDF-1.4..."))
+    open_patcher.start()
+    
+    return module, (exists_patcher, open_patcher)
 
 
 # ── tests ────────────────────────────────────────────────────────────────────
@@ -61,15 +70,16 @@ def test_import_has_no_hardcoded_execution():
         calls["count"] += 1
         return _FakePDF()
 
-    module, patcher = _import_decryptor_with_fake_pikepdf(open_impl)
+    module, patchers = _import_decryptor_with_fake_pikepdf(open_impl)
     try:
         assert calls["count"] == 0
     finally:
-        patcher.stop()
+        for p in patchers:
+            p.stop()
 
 
 def test_module_docstring_describes_scope():
-    module, patcher = _import_decryptor_with_fake_pikepdf(
+    module, patchers = _import_decryptor_with_fake_pikepdf(
         lambda *a, **k: _FakePDF()
     )
     try:
@@ -79,11 +89,12 @@ def test_module_docstring_describes_scope():
         assert "does not retry" in module_doc.lower()
         assert "single attempt" in module_doc.lower()
     finally:
-        patcher.stop()
+        for p in patchers:
+            p.stop()
 
 
 def test_not_encrypted_pdf_returns_expected_failure_shape():
-    module, patcher = _import_decryptor_with_fake_pikepdf(
+    module, patchers = _import_decryptor_with_fake_pikepdf(
         lambda *a, **k: _FakePDF()
     )
     try:
@@ -94,14 +105,19 @@ def test_not_encrypted_pdf_returns_expected_failure_shape():
             "attempts": 1,
         }
     finally:
-        patcher.stop()
+        for p in patchers:
+            p.stop()
 
 
 def test_wrong_password_returns_expected_failure_shape():
     def open_impl(path, password=None):
+        if password is None:
+            # First call in is_encrypted()
+            raise _FakePasswordError()
+        # Second call in decrypt_pdf() with wrong password
         raise _FakePasswordError()
 
-    module, patcher = _import_decryptor_with_fake_pikepdf(open_impl)
+    module, patchers = _import_decryptor_with_fake_pikepdf(open_impl)
     try:
         result = module.decrypt_pdf("input.pdf", "wrong", "out.pdf")
         assert result == {
@@ -110,7 +126,8 @@ def test_wrong_password_returns_expected_failure_shape():
             "attempts": 1,
         }
     finally:
-        patcher.stop()
+        for p in patchers:
+            p.stop()
 
 
 def test_correct_password_returns_success_and_saves_output():
@@ -126,7 +143,7 @@ def test_correct_password_returns_success_and_saves_output():
             raise _FakePasswordError()
         return SavingPDF()
 
-    module, patcher = _import_decryptor_with_fake_pikepdf(open_impl)
+    module, patchers = _import_decryptor_with_fake_pikepdf(open_impl)
     try:
         result = module.decrypt_pdf("input.pdf", "right", "decrypted.pdf")
         assert result == {
@@ -136,15 +153,67 @@ def test_correct_password_returns_success_and_saves_output():
         }
         assert saved["path"] == "decrypted.pdf"
     finally:
-        patcher.stop()
+        for p in patchers:
+            p.stop()
+
+
+def test_is_encrypted_returns_false_for_unprotected_pdf_bytes():
+    def open_impl(*args, **kwargs):
+        return _FakePDF()
+
+    module, patchers = _import_decryptor_with_fake_pikepdf(open_impl)
+    try:
+        assert module.is_encrypted(b"%PDF-1.4...") is False
+    finally:
+        for p in patchers:
+            p.stop()
+
+
+def test_is_encrypted_returns_true_for_password_protected_pdf_bytes():
+    def open_impl(*args, **kwargs):
+        raise _FakePasswordError()
+
+    module, patchers = _import_decryptor_with_fake_pikepdf(open_impl)
+    try:
+        assert module.is_encrypted(b"%PDF-1.4...") is True
+    finally:
+        for p in patchers:
+            p.stop()
+
+
+def test_decrypt_pdf_uses_is_encrypted_before_attempting_password_open():
+    calls = []
+
+    def open_impl(path, password=None):
+        calls.append({"path": path, "password": password})
+        if password is None:
+            raise _FakePasswordError()
+        return _FakePDF()
+
+    module, patchers = _import_decryptor_with_fake_pikepdf(open_impl)
+    try:
+        # builtins.open is already mocked by _import_decryptor_with_fake_pikepdf
+        module.decrypt_pdf("input.pdf", "secret", "out.pdf")
+        
+        # Expect at least two calls to pikepdf.open:
+        # 1. in is_encrypted() with no password (via io.BytesIO)
+        # 2. in decrypt_pdf() with password
+        assert len(calls) >= 2
+        assert calls[0]["password"] is None
+        assert isinstance(calls[0]["path"], io.BytesIO)
+        assert calls[1]["password"] == "secret"
+    finally:
+        for p in patchers:
+            p.stop()
 
 
 def test_missing_file_returns_file_not_found_failure():
     """When os.path.exists returns False the guard must fire immediately."""
-    module, patcher = _import_decryptor_with_fake_pikepdf(
+    module, patchers = _import_decryptor_with_fake_pikepdf(
         lambda *a, **k: _FakePDF()
     )
     try:
+        # Access the os module from the imported decryptor module
         with patch.object(module.os.path, "exists", return_value=False):
             result = module.decrypt_pdf("missing.pdf", "pw", "out.pdf")
         assert result == {
@@ -153,4 +222,5 @@ def test_missing_file_returns_file_not_found_failure():
             "attempts": 0,
         }
     finally:
-        patcher.stop()
+        for p in patchers:
+            p.stop()

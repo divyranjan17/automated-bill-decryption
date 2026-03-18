@@ -117,8 +117,13 @@ def extract_pdf_attachments(raw_parts: list[Message]) -> list[bytes]:
         if not is_pdf:
             continue
 
-        payload = part.get_payload(decode=True)
-        if payload:
+        try:
+            payload = part.get_content()
+        except Exception:
+            logger.warning("Failed to extract content from attachment part")
+            continue
+
+        if isinstance(payload, bytes) and payload:
             pdf_attachments.append(payload)
 
     return pdf_attachments
@@ -301,7 +306,7 @@ def _parse_message(uid: str, raw_bytes: bytes) -> dict:
     sender = parseaddr(_clean_header(message.get("From")))[1]
     subject = _decode_header_value(message.get("Subject"))
     body_text = _extract_body_text(message)
-    attachment_parts = _get_attachment_parts(message)
+    attachment_parts = list(message.iter_attachments())
     pdf_attachments = extract_pdf_attachments(attachment_parts)
 
     return {
@@ -359,25 +364,6 @@ def _html_to_text(value: str) -> str:
     text = unescape(text)
     text = re.sub(r"\s+", " ", text)
     return text.strip()
-
-
-def _get_attachment_parts(message: Message) -> list[Message]:
-    """Extract all message parts that are designated as attachments."""
-    attachments: list[Message] = []
-    parts = message.walk() if message.is_multipart() else [message]
-
-    for part in parts:
-        if part.is_multipart():
-            continue
-
-        if part.get_content_disposition() != "attachment":
-            continue
-
-        attachments.append(part)
-
-    return attachments
-
-
 def _is_valid_normalized_email(message: dict) -> bool:
     if set(message) != REQUIRED_KEYS:
         return False
