@@ -307,6 +307,11 @@ def _parse_message(uid: str, raw_bytes: bytes) -> dict:
     subject = _decode_header_value(message.get("Subject"))
     body_text = _extract_body_text(message)
     attachment_parts = list(message.iter_attachments())
+    # TODO: Phase 3: iter_attachments() skips inline images (content_disposition=inline).
+    # Banks like HDFC embed password hints as inline images with a Content-ID header.
+    # Phase 3: add a separate iter_parts() pass to extract inline image bytes
+    # and return them as inline_images: list[bytes] for vision LLM processing.
+    # Not to be taken up till phase 3
     pdf_attachments = extract_pdf_attachments(attachment_parts)
 
     return {
@@ -364,6 +369,7 @@ def _html_to_text(value: str) -> str:
     text = unescape(text)
     text = re.sub(r"\s+", " ", text)
     return text.strip()
+
 def _is_valid_normalized_email(message: dict) -> bool:
     if set(message) != REQUIRED_KEYS:
         return False
