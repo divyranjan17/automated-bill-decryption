@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from pydantic import BaseModel, field_validator
 from typing import Optional
 from enum import Enum
@@ -26,6 +28,7 @@ class DateFormat(str, Enum):
     DDMMYY = "DDMMYY"
     DDMMYYYY = "DDMMYYYY"
     MMDDYYYY = "MMDDYYYY"
+    YYYY = "YYYY"
 
 
 class Confidence(str, Enum):
@@ -63,7 +66,7 @@ class PasswordRule(BaseModel):
     reasoning: str # Plain English explanation of what the LLM understood about the instruction
     # institution_hint: Optional[str] = None # dropped it for MVP
     requires_static_password: bool = False # in case it's OTP based and not derivable from email, set value True
-    fallback_candidates: list[PasswordRule] = []
+    fallback_candidates: list[PasswordRuleVariant] = []
     unknown_fields: list[str] = []
 
     @field_validator("components")
