@@ -162,26 +162,8 @@ class TestBuildCandidates:
         assert len(result) == 1
         assert result[0] == "Sure"
 
-    def test_ambiguous_returns_multiple(self):
-        variant1 = _variant([
-            _component("name", 0, 4, transform="upper"),
-            _component("dob", date_format="DDMM"),
-        ])
-        variant2 = _variant([
-            _component("name", 0, 4, transform="upper"),
-            _component("card_masked", -4, None),
-        ])
-        rule = _rule(
-            components=variant1["components"],
-            ambiguous=True,
-            fallback_candidates=[variant1, variant2],
-        )
-        user = {"name": "C.K. Ajay Kumar", "dob": "1985-02-11", "card_masked": "009001234"}
-        result = build_candidates(rule, user)
-        assert len(result) == 2
-
     def test_candidate_values_correct(self):
-        """Axis Bank example: CKAJ1102 and CKAJ1234."""
+        """Axis Bank example: ambiguous rule produces exactly 2 candidates — CKAJ1102 and CKAJ1234."""
         variant1 = _variant([
             _component("name", 0, 4, transform="upper"),
             _component("dob", date_format="DDMM"),
@@ -201,6 +183,7 @@ class TestBuildCandidates:
             "card_masked": "009001234",
         }
         result = build_candidates(rule, user)
+        assert len(result) == 2
         assert result[0] == "CKAJ1102"
         assert result[1] == "CKAJ1234"
 
