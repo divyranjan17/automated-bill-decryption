@@ -57,7 +57,7 @@ class TestInterpretInstruction:
     def test_first_n_chars_of_name(self):
         result = interpret_instruction("first 4 letters of your name", {})
         c = result["components"][0]
-        assert c["field"] == "first_name"
+        assert c["field"] == "name"
         assert c["slice"] == {"start": 0, "end": 4}
         assert c["transform"] is None
         assert result["ambiguous"] is False
@@ -70,12 +70,6 @@ class TestInterpretInstruction:
         result = interpret_instruction("first four letters of your name in upper case", {})
         assert result["components"][0]["transform"] == "upper"
         assert result["components"][0]["slice"] == {"start": 0, "end": 4}
-
-    def test_last_name_variant(self):
-        result = interpret_instruction("first 3 letters of your last name", {})
-        c = result["components"][0]
-        assert c["field"] == "last_name"
-        assert c["slice"] == {"start": 0, "end": 3}
 
     def test_dob_ddmm(self):
         result = interpret_instruction("date of birth in DDMM format", {})
@@ -105,7 +99,7 @@ class TestInterpretInstruction:
             "first 4 letters of name followed by birth year", {}
         )
         assert len(result["components"]) == 2
-        assert result["components"][0]["field"] == "first_name"
+        assert result["components"][0]["field"] == "name"
         assert result["components"][0]["slice"] == {"start": 0, "end": 4}
         assert result["components"][1]["field"] == "dob"
         assert result["components"][1]["date_format"] == "YYYY"
@@ -115,7 +109,7 @@ class TestInterpretInstruction:
             "first 4 letters of your name and date of birth in DDMM format", {}
         )
         assert len(result["components"]) == 2
-        assert result["components"][0]["field"] == "first_name"
+        assert result["components"][0]["field"] == "name"
         assert result["components"][1]["field"] == "dob"
         assert result["components"][1]["date_format"] == "DDMM"
 

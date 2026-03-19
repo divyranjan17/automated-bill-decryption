@@ -130,7 +130,7 @@ def _parse_name_component(m: re.Match, full_text: str) -> tuple[dict, Optional[s
     """
     n = _to_int(m.group(1))
     qualifier = (m.group(2) or "").strip()
-    field = "last_name" if qualifier == "last" else "first_name"
+    field = "name"
     transform = _get_transform(full_text)
     return _make_component(field, 0, n, transform), transform
 
@@ -185,7 +185,7 @@ def _try_name_plus_dob(text: str) -> Optional[dict]:
         return None
 
     qualifier = (name_m.group(2) or "").strip()
-    field = "last_name" if qualifier == "last" else "first_name"
+    field = "name"
     transform = _get_transform(text)
     date_fmt = _DATE_FORMAT_MAP.get(dob_m.group(1))
 
@@ -216,7 +216,7 @@ def _try_name_plus_birth_year(text: str) -> Optional[dict]:
         return None
 
     qualifier = (name_m.group(2) or "").strip()
-    field = "last_name" if qualifier == "last" else "first_name"
+    field = "name"
     transform = _get_transform(text)
 
     return _make_rule(
@@ -248,7 +248,7 @@ def _try_name_plus_card_digits(text: str) -> Optional[dict]:
         return None
 
     qualifier = (name_m.group(2) or "").strip()
-    field = "last_name" if qualifier == "last" else "first_name"
+    field = "name"
     transform = _get_transform(text)
 
     return _make_rule(
@@ -339,7 +339,7 @@ def _try_name_only(text: str) -> Optional[dict]:
     if n is None:
         return None
     qualifier = (m.group(2) or "").strip()
-    field = "last_name" if qualifier == "last" else "first_name"
+    field = "name"
     transform = _get_transform(text)
     return _make_rule(
         [_make_component(field, 0, n, transform)],

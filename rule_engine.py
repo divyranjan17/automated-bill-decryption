@@ -15,7 +15,7 @@ from src.constants.failure_reasons import FailureReason
 
 logger = logging.getLogger(__name__)
 
-_NAME_FIELDS = {"first_name", "last_name"}
+_NAME_FIELDS = {"name"}
 
 
 def _normalize_name(value: str) -> str:

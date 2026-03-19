@@ -80,24 +80,24 @@ class TestFormatDate:
 
 class TestBuildCandidate:
     def test_simple_name_slice(self):
-        rule = _rule([_component("first_name", 0, 4)])
-        assert build_candidate(rule, {"first_name": "Suresh"}) == "Sure"
+        rule = _rule([_component("name", 0, 4)])
+        assert build_candidate(rule, {"name": "Suresh"}) == "Sure"
 
     def test_slice_clamps_to_length(self):
-        rule = _rule([_component("first_name", 0, 10)])
-        assert build_candidate(rule, {"first_name": "Ali"}) == "Ali"
+        rule = _rule([_component("name", 0, 10)])
+        assert build_candidate(rule, {"name": "Ali"}) == "Ali"
 
     def test_transform_upper(self):
-        rule = _rule([_component("first_name", 0, 4, transform="upper")])
-        assert build_candidate(rule, {"first_name": "suresh"}) == "SURE"
+        rule = _rule([_component("name", 0, 4, transform="upper")])
+        assert build_candidate(rule, {"name": "suresh"}) == "SURE"
 
     def test_transform_lower(self):
-        rule = _rule([_component("first_name", 0, 4, transform="lower")])
-        assert build_candidate(rule, {"first_name": "SURESH"}) == "sure"
+        rule = _rule([_component("name", 0, 4, transform="lower")])
+        assert build_candidate(rule, {"name": "SURESH"}) == "sure"
 
     def test_null_transform_no_op(self):
-        rule = _rule([_component("first_name", 0, 4, transform=None)])
-        assert build_candidate(rule, {"first_name": "Suresh"}) == "Sure"
+        rule = _rule([_component("name", 0, 4, transform=None)])
+        assert build_candidate(rule, {"name": "Suresh"}) == "Sure"
 
     def test_dob_formatted_ddmm(self):
         rule = _rule([_component("dob", date_format="DDMM")])
@@ -105,34 +105,34 @@ class TestBuildCandidate:
 
     def test_multi_component_empty_sep(self):
         rule = _rule([
-            _component("first_name", 0, 4),
+            _component("name", 0, 4),
             _component("dob", date_format="DDMM"),
         ], separator="")
-        assert build_candidate(rule, {"first_name": "Suresh", "dob": "1990-01-15"}) == "Sure1501"
+        assert build_candidate(rule, {"name": "Suresh", "dob": "1990-01-15"}) == "Sure1501"
 
     def test_multi_component_dash_sep(self):
         rule = _rule([
-            _component("first_name", 0, 4),
+            _component("name", 0, 4),
             _component("dob", date_format="DDMM"),
         ], separator="-")
-        assert build_candidate(rule, {"first_name": "Suresh", "dob": "1990-01-15"}) == "Sure-1501"
+        assert build_candidate(rule, {"name": "Suresh", "dob": "1990-01-15"}) == "Sure-1501"
 
     def test_missing_user_field_raises(self):
         rule = _rule([_component("mobile", -4, None)])
         with pytest.raises(ValueError, match=FailureReason.REQUIRED_USER_DATA_MISSING.value):
-            build_candidate(rule, {"first_name": "Suresh"})
+            build_candidate(rule, {"name": "Suresh"})
 
     def test_name_normalization_strips_periods_and_spaces(self):
         """
         Axis Bank: name "C.K. Ajay Kumar" → strip periods+spaces → "CKAjayKumar"
         → first 4 upper → "CKAJ".
         """
-        rule = _rule([_component("first_name", 0, 4, transform="upper")])
-        assert build_candidate(rule, {"first_name": "C.K. Ajay Kumar"}) == "CKAJ"
+        rule = _rule([_component("name", 0, 4, transform="upper")])
+        assert build_candidate(rule, {"name": "C.K. Ajay Kumar"}) == "CKAJ"
 
     def test_name_normalization_strips_spaces(self):
-        rule = _rule([_component("first_name", 0, 4)])
-        assert build_candidate(rule, {"first_name": "A B C D"}) == "ABCD"
+        rule = _rule([_component("name", 0, 4)])
+        assert build_candidate(rule, {"name": "A B C D"}) == "ABCD"
 
     def test_birth_year_via_yyyy_date_format(self):
         rule = _rule([_component("dob", date_format="YYYY")])
@@ -140,10 +140,10 @@ class TestBuildCandidate:
 
     def test_name_plus_birth_year(self):
         rule = _rule([
-            _component("first_name", 0, 4),
+            _component("name", 0, 4),
             _component("dob", date_format="YYYY"),
         ], separator="")
-        result = build_candidate(rule, {"first_name": "John", "dob": "1985-03-22"})
+        result = build_candidate(rule, {"name": "John", "dob": "1985-03-22"})
         assert result == "John1985"
 
     def test_mobile_last_4(self):
@@ -157,18 +157,18 @@ class TestBuildCandidate:
 
 class TestBuildCandidates:
     def test_unambiguous_returns_single(self):
-        rule = _rule([_component("first_name", 0, 4)])
-        result = build_candidates(rule, {"first_name": "Suresh"})
+        rule = _rule([_component("name", 0, 4)])
+        result = build_candidates(rule, {"name": "Suresh"})
         assert len(result) == 1
         assert result[0] == "Sure"
 
     def test_ambiguous_returns_multiple(self):
         variant1 = _variant([
-            _component("first_name", 0, 4, transform="upper"),
+            _component("name", 0, 4, transform="upper"),
             _component("dob", date_format="DDMM"),
         ])
         variant2 = _variant([
-            _component("first_name", 0, 4, transform="upper"),
+            _component("name", 0, 4, transform="upper"),
             _component("card_masked", -4, None),
         ])
         rule = _rule(
@@ -176,18 +176,18 @@ class TestBuildCandidates:
             ambiguous=True,
             fallback_candidates=[variant1, variant2],
         )
-        user = {"first_name": "C.K. Ajay Kumar", "dob": "1985-02-11", "card_masked": "009001234"}
+        user = {"name": "C.K. Ajay Kumar", "dob": "1985-02-11", "card_masked": "009001234"}
         result = build_candidates(rule, user)
         assert len(result) == 2
 
     def test_candidate_values_correct(self):
         """Axis Bank example: CKAJ1102 and CKAJ1234."""
         variant1 = _variant([
-            _component("first_name", 0, 4, transform="upper"),
+            _component("name", 0, 4, transform="upper"),
             _component("dob", date_format="DDMM"),
         ])
         variant2 = _variant([
-            _component("first_name", 0, 4, transform="upper"),
+            _component("name", 0, 4, transform="upper"),
             _component("card_masked", -4, None),
         ])
         rule = _rule(
@@ -196,7 +196,7 @@ class TestBuildCandidates:
             fallback_candidates=[variant1, variant2],
         )
         user = {
-            "first_name": "C.K. Ajay Kumar",
+            "name": "C.K. Ajay Kumar",
             "dob": "1985-02-11",
             "card_masked": "009001234",
         }
@@ -207,4 +207,4 @@ class TestBuildCandidates:
     def test_required_data_missing_propagates(self):
         rule = _rule([_component("mobile", -4, None)])
         with pytest.raises(ValueError, match=FailureReason.REQUIRED_USER_DATA_MISSING.value):
-            build_candidates(rule, {"first_name": "Suresh"})
+            build_candidates(rule, {"name": "Suresh"})
