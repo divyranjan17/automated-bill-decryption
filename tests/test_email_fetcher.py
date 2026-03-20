@@ -166,7 +166,7 @@ def test_fetch_emails_searches_for_unprocessed_messages(monkeypatch):
     fake_imap.uid.assert_any_call(
         "SEARCH",
         "X-GM-RAW",
-        '"after:2026/02/15 -label:bill-processed"',
+        '"after:2026/02/15 -label:bill-processed category:primary"',
     )
 
 
@@ -191,7 +191,7 @@ def test_fetch_emails_uses_existing_checkpoint_for_incremental_search(
     fake_imap.uid.assert_any_call(
         "SEARCH",
         "X-GM-RAW",
-        '"after:2026/03/10 -label:bill-processed"',
+        '"after:2026/03/10 -label:bill-processed category:primary"',
     )
 
 

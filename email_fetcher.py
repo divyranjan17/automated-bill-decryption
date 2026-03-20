@@ -26,10 +26,11 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_MAILBOX = "INBOX"
 DEFAULT_PROCESSED_LABEL = "bill-processed"
+DEFAULT_CATEGORY = "primary"
 DEFAULT_MAX_EMAILS_PER_RUN = 50
 DEFAULT_LOOKBACK_CAP_DAYS = 365
 DEFAULT_CHECKPOINT_PATH = Path("data") / "email_fetch_checkpoint.txt"
-UNPROCESSED_SEARCH_TEMPLATE = 'after:{after_date} -label:{label}'
+UNPROCESSED_SEARCH_TEMPLATE = 'after:{after_date} -label:{label} category:{category}'
 REQUIRED_KEYS = {
     "uid",
     "message_id",
@@ -60,6 +61,7 @@ def fetch_emails() -> list[dict]:
         search_query = UNPROCESSED_SEARCH_TEMPLATE.format(
             after_date=_resolve_search_start(config).strftime("%Y/%m/%d"),
             label=config["processed_label"],
+            category=config["category"],
         )
         # print(f"search query: {search_query}")
         status, search_data = client.uid(
@@ -187,6 +189,7 @@ def _load_config() -> dict:
             "EMAIL_PROCESSED_LABEL",
             DEFAULT_PROCESSED_LABEL,
         ),
+        "category": os.getenv("EMAIL_CATEGORY", DEFAULT_CATEGORY),
         "max_emails_per_run": _get_int_env(
             "MAX_EMAILS_PER_RUN",
             DEFAULT_MAX_EMAILS_PER_RUN,
