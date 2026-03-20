@@ -347,10 +347,6 @@ def _try_name_only(text: str) -> Optional[dict]:
     )
 
 
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
-
 def extract_password_hint(body_text: str) -> Optional[str]:
     """
     Scans an email body for the sentence or paragraph containing the

@@ -30,10 +30,10 @@ def _normalize_name(value: str) -> str:
 
 def format_date(dob: str, date_format: str) -> str:
     """
-    Formats a stored DOB string (ISO: YYYY-MM-DD) to the requested format.
+    Formats a stored DOB string (DD-MM-YYYY) to the requested format.
 
     Args:
-        dob: Date string in YYYY-MM-DD format.
+        dob: Date string in DD-MM-YYYY format.
         date_format: One of DDMM, DDMMYY, DDMMYYYY, MMDD, MMDDYYYY, YYYY.
 
     Returns:
@@ -43,10 +43,10 @@ def format_date(dob: str, date_format: str) -> str:
         ValueError for invalid DOB strings or unsupported format strings.
     """
     try:
-        dt = datetime.strptime(dob, "%Y-%m-%d")
+        dt = datetime.strptime(dob, "%d-%m-%Y")
     except ValueError as exc:
         raise ValueError(
-            f"Invalid DOB format: {dob!r}. Expected YYYY-MM-DD."
+            f"Invalid DOB format: {dob!r}. Expected DD-MM-YYYY."
         ) from exc
 
     fmt_map: dict[str, str] = {

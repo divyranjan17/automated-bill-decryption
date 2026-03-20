@@ -48,30 +48,30 @@ def _variant(components, separator="") -> dict:
 
 class TestFormatDate:
     def test_ddmm(self):
-        assert format_date("1990-01-15", "DDMM") == "1501"
+        assert format_date("15-01-1990", "DDMM") == "1501"
 
     def test_ddmmyyyy(self):
-        assert format_date("1990-01-15", "DDMMYYYY") == "15011990"
+        assert format_date("15-01-1990", "DDMMYYYY") == "15011990"
 
     def test_mmdd(self):
-        assert format_date("1990-01-15", "MMDD") == "0115"
+        assert format_date("15-01-1990", "MMDD") == "0115"
 
     def test_ddmmyy(self):
-        assert format_date("1990-01-15", "DDMMYY") == "150190"
+        assert format_date("15-01-1990", "DDMMYY") == "150190"
 
     def test_mmddyyyy(self):
-        assert format_date("1990-01-15", "MMDDYYYY") == "01151990"
+        assert format_date("15-01-1990", "MMDDYYYY") == "01151990"
 
     def test_yyyy(self):
-        assert format_date("1985-03-22", "YYYY") == "1985"
+        assert format_date("22-03-1985", "YYYY") == "1985"
 
     def test_invalid_format_raises(self):
         with pytest.raises(ValueError, match="Unsupported date_format"):
-            format_date("1990-01-15", "YYYYMMDD")
+            format_date("15-01-1990", "YYYYMMDD")
 
     def test_invalid_dob_raises(self):
         with pytest.raises(ValueError, match="Invalid DOB"):
-            format_date("15-01-1990", "DDMM")
+            format_date("1990-01-15", "DDMM")
 
 
 # ---------------------------------------------------------------------------
@@ -101,21 +101,21 @@ class TestBuildCandidate:
 
     def test_dob_formatted_ddmm(self):
         rule = _rule([_component("dob", date_format="DDMM")])
-        assert build_candidate(rule, {"dob": "1990-01-15"}) == "1501"
+        assert build_candidate(rule, {"dob": "15-01-1990"}) == "1501"
 
     def test_multi_component_empty_sep(self):
         rule = _rule([
             _component("name", 0, 4),
             _component("dob", date_format="DDMM"),
         ], separator="")
-        assert build_candidate(rule, {"name": "Suresh", "dob": "1990-01-15"}) == "Sure1501"
+        assert build_candidate(rule, {"name": "Suresh", "dob": "15-01-1990"}) == "Sure1501"
 
     def test_multi_component_dash_sep(self):
         rule = _rule([
             _component("name", 0, 4),
             _component("dob", date_format="DDMM"),
         ], separator="-")
-        assert build_candidate(rule, {"name": "Suresh", "dob": "1990-01-15"}) == "Sure-1501"
+        assert build_candidate(rule, {"name": "Suresh", "dob": "15-01-1990"}) == "Sure-1501"
 
     def test_missing_user_field_raises(self):
         rule = _rule([_component("mobile", -4, None)])
@@ -136,14 +136,14 @@ class TestBuildCandidate:
 
     def test_birth_year_via_yyyy_date_format(self):
         rule = _rule([_component("dob", date_format="YYYY")])
-        assert build_candidate(rule, {"dob": "1985-03-22"}) == "1985"
+        assert build_candidate(rule, {"dob": "22-03-1985"}) == "1985"
 
     def test_name_plus_birth_year(self):
         rule = _rule([
             _component("name", 0, 4),
             _component("dob", date_format="YYYY"),
         ], separator="")
-        result = build_candidate(rule, {"name": "John", "dob": "1985-03-22"})
+        result = build_candidate(rule, {"name": "John", "dob": "22-03-1985"})
         assert result == "John1985"
 
     def test_mobile_last_4(self):
@@ -179,7 +179,7 @@ class TestBuildCandidates:
         )
         user = {
             "name": "C.K. Ajay Kumar",
-            "dob": "1985-02-11",
+            "dob": "11-02-1985",
             "card_masked": "009001234",
         }
         result = build_candidates(rule, user)

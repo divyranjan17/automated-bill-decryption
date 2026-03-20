@@ -18,7 +18,7 @@ from typing import Optional
 
 try:
     from dotenv import load_dotenv
-except ImportError:  # pragma: no cover - fallback for minimal environments
+except ImportError:
     def load_dotenv() -> bool:
         return False
 
@@ -37,6 +37,7 @@ REQUIRED_KEYS = {
     "subject",
     "body_text",
     "pdf_attachments",
+    "pdf_filenames",
 }
 
 
@@ -95,12 +96,16 @@ def fetch_emails() -> list[dict]:
     return messages
 
 
-def extract_pdf_attachments(raw_parts: list[Message]) -> list[bytes]:
-    """Filter and extract PDF payloads from a list of message parts."""
+def extract_pdf_attachments(
+    raw_parts: list[Message],
+) -> tuple[list[bytes], list[str]]:
+    """Filter and extract PDF payloads and filenames from a list of message parts."""
     pdf_attachments: list[bytes] = []
+    pdf_filenames: list[str] = []
     for part in raw_parts:
         mime_type = part.get_content_type()
-        filename = (part.get_filename() or "").lower()
+        raw_filename = part.get_filename() or ""
+        filename_lower = raw_filename.lower()
 
         is_pdf = (
             mime_type == "application/pdf"
@@ -110,7 +115,7 @@ def extract_pdf_attachments(raw_parts: list[Message]) -> list[bytes]:
                     "application/download",
                     "application/force-download",
                 )
-                and filename.endswith(".pdf")
+                and filename_lower.endswith(".pdf")
             )
         )
 
@@ -125,8 +130,9 @@ def extract_pdf_attachments(raw_parts: list[Message]) -> list[bytes]:
 
         if isinstance(payload, bytes) and payload:
             pdf_attachments.append(payload)
+            pdf_filenames.append(raw_filename or "attachment.pdf")
 
-    return pdf_attachments
+    return pdf_attachments, pdf_filenames
 
 
 def mark_email_processed(uid: str) -> None:
@@ -312,7 +318,7 @@ def _parse_message(uid: str, raw_bytes: bytes) -> dict:
     # Phase 3: add a separate iter_parts() pass to extract inline image bytes
     # and return them as inline_images: list[bytes] for vision LLM processing.
     # Not to be taken up till phase 3
-    pdf_attachments = extract_pdf_attachments(attachment_parts)
+    pdf_attachments, pdf_filenames = extract_pdf_attachments(attachment_parts)
 
     return {
         "uid": uid,
@@ -321,6 +327,7 @@ def _parse_message(uid: str, raw_bytes: bytes) -> dict:
         "subject": subject,
         "body_text": body_text,
         "pdf_attachments": pdf_attachments,
+        "pdf_filenames": pdf_filenames,
     }
 
 
@@ -375,9 +382,15 @@ def _is_valid_normalized_email(message: dict) -> bool:
         return False
     if not all(
         isinstance(message[key], str)
-        for key in REQUIRED_KEYS - {"pdf_attachments"}
+        for key in REQUIRED_KEYS - {"pdf_attachments", "pdf_filenames"}
     ):
         return False
     if not isinstance(message["pdf_attachments"], list):
         return False
-    return all(isinstance(item, bytes) for item in message["pdf_attachments"])
+    if not all(isinstance(item, bytes) for item in message["pdf_attachments"]):
+        return False
+    if not isinstance(message["pdf_filenames"], list):
+        return False
+    if len(message["pdf_filenames"]) != len(message["pdf_attachments"]):
+        return False
+    return all(isinstance(item, str) for item in message["pdf_filenames"])

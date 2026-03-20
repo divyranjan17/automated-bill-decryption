@@ -6,7 +6,7 @@ pytest
 pikepdf
 PyPDF2
 python-dotenv
-click
+typer
 pydantic
 boto3
 google-auth

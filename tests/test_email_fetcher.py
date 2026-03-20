@@ -121,6 +121,7 @@ def test_fetch_emails_returns_normalized_messages(monkeypatch):
             "subject": "Statement",
             "body_text": "Password is your DOB.",
             "pdf_attachments": [b"%PDF-1.4..."],
+            "pdf_filenames": ["statement.pdf"],
         }
     ]
 
@@ -141,6 +142,7 @@ def test_fetch_emails_contract_includes_message_id(monkeypatch):
         "subject",
         "body_text",
         "pdf_attachments",
+        "pdf_filenames",
     }
 
 
@@ -351,8 +353,9 @@ def test_extract_pdf_attachments_returns_only_application_pdf_parts(monkeypatch)
 
     pdf_part, txt_part = list(message.iter_attachments())
 
-    result = module.extract_pdf_attachments([pdf_part, txt_part])
-    assert result == [b"%PDF-1.4..."]
+    attachments, filenames = module.extract_pdf_attachments([pdf_part, txt_part])
+    assert attachments == [b"%PDF-1.4..."]
+    assert filenames == ["bill.pdf"]
 
 
 def test_extract_pdf_attachments_uses_get_content_for_pdf_parts(monkeypatch):
@@ -372,9 +375,10 @@ def test_extract_pdf_attachments_uses_get_content_for_pdf_parts(monkeypatch):
         def get_payload(self, decode=False):
             raise AssertionError("legacy get_payload should not be used")
 
-    result = module.extract_pdf_attachments([FakePdfPart()])
+    attachments, filenames = module.extract_pdf_attachments([FakePdfPart()])
 
-    assert result == [b"%PDF-1.7..."]
+    assert attachments == [b"%PDF-1.7..."]
+    assert filenames == ["bill.pdf"]
 
 
 def test_extract_pdf_attachments_octet_stream_mime_and_pdf_extension_returns_bytes(monkeypatch):
@@ -390,22 +394,24 @@ def test_extract_pdf_attachments_octet_stream_mime_and_pdf_extension_returns_byt
     )
     pdf_part = next(message.iter_attachments())
 
-    result = module.extract_pdf_attachments([pdf_part])
-    assert result == [b"%PDF-1.4..."]
+    attachments, filenames = module.extract_pdf_attachments([pdf_part])
+    assert attachments == [b"%PDF-1.4..."]
+    assert filenames == ["bill.pdf"]
 
 
 def test_extract_pdf_attachments_returns_empty_list_when_no_pdfs_exist(monkeypatch):
     fake_imap = FakeIMAP()
     module = _load_module(monkeypatch, fake_imap)
-    
+
     from email.message import Message
     txt_part = Message()
     txt_part.set_type("text/plain")
     txt_part.add_header("Content-Disposition", "attachment", filename="readme.txt")
     txt_part.set_payload(b"hello")
-    
-    result = module.extract_pdf_attachments([txt_part])
-    assert result == []
+
+    attachments, filenames = module.extract_pdf_attachments([txt_part])
+    assert attachments == []
+    assert filenames == []
 
 
 def test_parse_message_uses_iter_attachments_instead_of_legacy_attachment_helper(
@@ -452,6 +458,7 @@ def test_parse_message_uses_iter_attachments_instead_of_legacy_attachment_helper
 
     assert iter_attachments_called is True
     assert parsed["pdf_attachments"] == [b"%PDF-1.4..."]
+    assert parsed["pdf_filenames"] == ["statement.pdf"]
 
 
 def test_fetch_emails_returns_pdf_attachments_contract(monkeypatch):
@@ -465,6 +472,8 @@ def test_fetch_emails_returns_pdf_attachments_contract(monkeypatch):
     assert "pdf_attachments" in messages[0]
     assert messages[0]["pdf_attachments"] == [b"%PDF-1.4..."]
     assert "attachments" not in messages[0]
+    assert "pdf_filenames" in messages[0]
+    assert messages[0]["pdf_filenames"] == ["statement.pdf"]
 
 
 def test_commit_fetch_checkpoint_writes_timestamp_to_data_path(
