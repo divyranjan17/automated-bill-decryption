@@ -42,10 +42,23 @@ REQUIRED_KEYS = {
 }
 
 
-def fetch_emails() -> list[dict]:
-    """Fetch normalized email data for unprocessed Gmail messages."""
+def fetch_emails(search_after: Optional[datetime] = None) -> list[dict]:
+    """Fetch normalized email data for unprocessed Gmail messages.
+
+    Args:
+        search_after: Fetch emails received after this timestamp. When None,
+                      falls back to ``lookback_cap_days`` days ago.
+
+    Returns:
+        List of normalized email dicts.
+    """
     config = _load_config()
     logger.info("Connecting to IMAP host %s", config["host"])
+
+    if search_after is not None:
+        search_start = search_after
+    else:
+        search_start = _utc_now() - timedelta(days=config["lookback_cap_days"])
 
     messages: list[dict] = []
     with imaplib.IMAP4_SSL(config["host"]) as client:
@@ -59,7 +72,7 @@ def fetch_emails() -> list[dict]:
         logger.info("Selected mailbox %s", config["mailbox"])
 
         search_query = UNPROCESSED_SEARCH_TEMPLATE.format(
-            after_date=_resolve_search_start(config).strftime("%Y/%m/%d"),
+            after_date=search_start.strftime("%Y/%m/%d"),
             label=config["processed_label"],
             category=config["category"],
         )
@@ -162,8 +175,9 @@ def mark_email_processed(uid: str) -> None:
 
 def commit_fetch_checkpoint(timestamp: Optional[datetime] = None) -> None:
     """Persist the fetch checkpoint after a full pipeline run completes."""
-    config = _load_config()
-    checkpoint_path = config["checkpoint_path"]
+    checkpoint_path = Path(
+        os.getenv("EMAIL_CHECKPOINT_PATH", str(DEFAULT_CHECKPOINT_PATH))
+    )
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
 
     checkpoint_value = _normalize_timestamp(timestamp or _utc_now())
@@ -198,9 +212,6 @@ def _load_config() -> dict:
             "EMAIL_LOOKBACK_CAP_DAYS",
             DEFAULT_LOOKBACK_CAP_DAYS,
         ),
-        "checkpoint_path": Path(
-            os.getenv("EMAIL_CHECKPOINT_PATH", str(DEFAULT_CHECKPOINT_PATH))
-        ),
     }
 
 
@@ -231,28 +242,6 @@ def _get_int_env(name: str, default: int) -> int:
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
-
-
-def _resolve_search_start(config: dict) -> datetime:
-    checkpoint = _read_checkpoint(config["checkpoint_path"])
-    if checkpoint is not None:
-        return checkpoint
-    return _utc_now() - timedelta(days=config["lookback_cap_days"])
-
-
-def _read_checkpoint(checkpoint_path: Path) -> Optional[datetime]:
-    if not checkpoint_path.exists():
-        return None
-
-    raw_value = checkpoint_path.read_text(encoding="utf-8").strip()
-    if not raw_value:
-        return None
-
-    try:
-        return _normalize_timestamp(datetime.fromisoformat(raw_value))
-    except ValueError as exc:
-        logger.error("Invalid checkpoint timestamp in %s", checkpoint_path)
-        raise RuntimeError("Invalid fetch checkpoint timestamp") from exc
 
 
 def _normalize_timestamp(timestamp: datetime) -> datetime:

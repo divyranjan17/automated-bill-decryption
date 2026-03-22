@@ -19,6 +19,7 @@ from orchestrator import (
     _extract_sender_domain,
     _is_terminal,
     _process_single_email,
+    _resolve_email_status,
     _resolve_output_path,
     run_pipeline,
 )
@@ -31,12 +32,15 @@ from src.constants.failure_reasons import FailureReason
 
 USER = {
     "name": "John Doe",
-    "dob": "1990-01-15",
+    "dob": "1990-01-15",  # ISO format — as passed to _process_single_email after normalization
     "mobile": "9876543210",
     "pan": "ABCDE1234F",
     "card_masked": "12345678",
     "account_masked": "87654321",
 }
+
+# Profile as stored in user_profile.json — dob in DD-MM-YYYY before run_pipeline normalizes it
+_PROFILE_DATA = {**USER, "dob": "15-01-1990"}
 
 _PLAIN_EMAIL: dict = {
     "uid": "101",
@@ -304,23 +308,26 @@ def test_is_terminal_false_for_retryable_failures(failure_reason):
 
 def test_run_pipeline_terminates_when_fetch_returns_empty(tmp_path):
     profile_path = tmp_path / "profile.json"
-    profile_path.write_text(json.dumps(USER), encoding="utf-8")
+    profile_path.write_text(json.dumps(_PROFILE_DATA), encoding="utf-8")
 
-    with patch.object(orchestrator, "fetch_emails", return_value=[]) as mock_fetch, \
-         patch.object(orchestrator, "commit_fetch_checkpoint") as mock_checkpoint:
+    with patch.object(orchestrator, "init_db"), \
+         patch.object(orchestrator, "ensure_user", return_value=1), \
+         patch.object(orchestrator, "get_last_fetched_date", return_value=None), \
+         patch.object(orchestrator, "fetch_emails", return_value=[]) as mock_fetch, \
+         patch.object(orchestrator, "update_last_fetched_date") as mock_update:
         results = run_pipeline(
             output_dir=str(tmp_path / "output"),
             profile_path=str(profile_path),
         )
 
     mock_fetch.assert_called_once()
-    mock_checkpoint.assert_called_once()
+    mock_update.assert_called_once()
     assert results == []
 
 
 def test_run_pipeline_processes_multiple_batches(tmp_path):
     profile_path = tmp_path / "profile.json"
-    profile_path.write_text(json.dumps(USER), encoding="utf-8")
+    profile_path.write_text(json.dumps(_PROFILE_DATA), encoding="utf-8")
 
     email_a = _email(uid="101")
     email_b = _email(uid="202")
@@ -334,16 +341,21 @@ def test_run_pipeline_processes_multiple_batches(tmp_path):
         explanation="no pdf",
     )
 
-    with patch.object(
-        orchestrator, "fetch_emails", side_effect=fetch_side_effect
-    ), \
+    with patch.object(orchestrator, "init_db"), \
+         patch.object(orchestrator, "ensure_user", return_value=1), \
+         patch.object(orchestrator, "get_last_fetched_date", return_value=None), \
+         patch.object(orchestrator, "email_exists_in_db", return_value=None), \
+         patch.object(orchestrator, "record_email_result"), \
+         patch.object(orchestrator, "update_last_fetched_date"), \
+         patch.object(
+             orchestrator, "fetch_emails", side_effect=fetch_side_effect
+         ), \
          patch.object(
              orchestrator,
              "_process_single_email",
              return_value=terminal_result,
          ) as mock_process, \
-         patch.object(orchestrator, "mark_email_processed") as mock_label, \
-         patch.object(orchestrator, "commit_fetch_checkpoint"):
+         patch.object(orchestrator, "mark_email_processed") as mock_label:
         results = run_pipeline(
             output_dir=str(tmp_path / "output"),
             profile_path=str(profile_path),
@@ -356,7 +368,7 @@ def test_run_pipeline_processes_multiple_batches(tmp_path):
 
 def test_run_pipeline_labels_only_terminal_results(tmp_path):
     profile_path = tmp_path / "profile.json"
-    profile_path.write_text(json.dumps(USER), encoding="utf-8")
+    profile_path.write_text(json.dumps(_PROFILE_DATA), encoding="utf-8")
 
     terminal_result = EmailResult(
         uid="101", sender="s", subject="sub", status="failure",
@@ -372,16 +384,21 @@ def test_run_pipeline_labels_only_terminal_results(tmp_path):
     email_a = _email(uid="101")
     email_b = _email(uid="202")
 
-    with patch.object(
-        orchestrator, "fetch_emails", side_effect=[[email_a, email_b], []]
-    ), \
+    with patch.object(orchestrator, "init_db"), \
+         patch.object(orchestrator, "ensure_user", return_value=1), \
+         patch.object(orchestrator, "get_last_fetched_date", return_value=None), \
+         patch.object(orchestrator, "email_exists_in_db", return_value=None), \
+         patch.object(orchestrator, "record_email_result"), \
+         patch.object(orchestrator, "update_last_fetched_date"), \
+         patch.object(
+             orchestrator, "fetch_emails", side_effect=[[email_a, email_b], []]
+         ), \
          patch.object(
              orchestrator,
              "_process_single_email",
              side_effect=[terminal_result, retryable_result],
          ), \
-         patch.object(orchestrator, "mark_email_processed") as mock_label, \
-         patch.object(orchestrator, "commit_fetch_checkpoint"):
+         patch.object(orchestrator, "mark_email_processed") as mock_label:
         run_pipeline(
             output_dir=str(tmp_path / "output"),
             profile_path=str(profile_path),
@@ -389,6 +406,81 @@ def test_run_pipeline_labels_only_terminal_results(tmp_path):
 
     # Only the terminal result (uid=101) should be labeled
     mock_label.assert_called_once_with("101")
+
+
+# ---------------------------------------------------------------------------
+# _resolve_email_status
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_email_status_success():
+    result = EmailResult(
+        uid="1", sender="s", subject="sub", status="success",
+        failure_reason=None, explanation="ok",
+    )
+    assert _resolve_email_status(result) == "SUCCESS"
+
+
+@pytest.mark.parametrize(
+    "failure_reason",
+    [
+        FailureReason.NOT_A_BILL_EMAIL.value,
+        FailureReason.NO_PDF_ATTACHMENT.value,
+        FailureReason.PDF_NOT_ENCRYPTED.value,
+        FailureReason.INVALID_RULE.value,
+        FailureReason.REQUIRES_STATIC_PASSWORD.value,
+    ],
+)
+def test_resolve_email_status_terminal(failure_reason):
+    result = EmailResult(
+        uid="1", sender="s", subject="sub", status="failure",
+        failure_reason=failure_reason, explanation="",
+    )
+    assert _resolve_email_status(result) == "FAILURE_TERMINAL"
+
+
+@pytest.mark.parametrize(
+    "failure_reason",
+    [
+        FailureReason.CANDIDATE_LIST_EXHAUSTED.value,
+        FailureReason.REQUIRED_USER_DATA_MISSING.value,
+        FailureReason.NO_PASSWORD_HINT_FOUND.value,
+        FailureReason.HINT_FOUND_BUT_UNPARSABLE.value,
+    ],
+)
+def test_resolve_email_status_retryable(failure_reason):
+    result = EmailResult(
+        uid="1", sender="s", subject="sub", status="failure",
+        failure_reason=failure_reason, explanation="",
+    )
+    assert _resolve_email_status(result) == "FAILURE_RETRYABLE"
+
+
+def test_run_pipeline_skips_already_processed_email(tmp_path):
+    profile_path = tmp_path / "profile.json"
+    profile_path.write_text(json.dumps(_PROFILE_DATA), encoding="utf-8")
+
+    email_a = _email(uid="101")
+
+    with patch.object(orchestrator, "init_db"), \
+         patch.object(orchestrator, "ensure_user", return_value=1), \
+         patch.object(orchestrator, "get_last_fetched_date", return_value=None), \
+         patch.object(
+             orchestrator,
+             "email_exists_in_db",
+             return_value={"id": 5, "status": "SUCCESS", "failure_reason": None},
+         ), \
+         patch.object(orchestrator, "record_email_result") as mock_record, \
+         patch.object(orchestrator, "update_last_fetched_date"), \
+         patch.object(orchestrator, "fetch_emails", side_effect=[[email_a], []]), \
+         patch.object(orchestrator, "_process_single_email") as mock_process:
+        run_pipeline(
+            output_dir=str(tmp_path / "output"),
+            profile_path=str(profile_path),
+        )
+
+    mock_process.assert_not_called()
+    mock_record.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

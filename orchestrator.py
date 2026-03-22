@@ -11,11 +11,22 @@ import logging
 import os
 import tempfile
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Optional
 
+_UTC = timezone.utc
+
 from decryptor import decrypt_pdf, is_encrypted
-from email_fetcher import commit_fetch_checkpoint, fetch_emails, mark_email_processed
+from email_fetcher import fetch_emails, mark_email_processed
 from interpreter import extract_password_hint, interpret_instruction
+from persistence import (
+    email_exists as email_exists_in_db,
+    ensure_user,
+    get_last_fetched_date,
+    init_db,
+    record_email_result,
+    update_last_fetched_date,
+)
 from rule_engine import build_candidates
 from src.constants.failure_reasons import FailureReason
 
@@ -53,25 +64,50 @@ class EmailResult:
 def run_pipeline(
     output_dir: str = "output/decrypted",
     profile_path: str = "data/user_profile.json",
+    db_path: str = "data/bill_decryption.db",
 ) -> list[EmailResult]:
     """Fetch and process all unprocessed billing emails.
 
     Args:
         output_dir: Root directory for decrypted PDFs.
         profile_path: Path to the user profile JSON file.
+        db_path: Path to the SQLite database file.
 
     Returns:
         List of EmailResult objects, one per processed email.
     """
+    init_db(db_path)
+
     user = _load_user_profile(profile_path)
+    # Normalize DOB from DD-MM-YYYY (user_profile.json) to ISO (YYYY-MM-DD)
+    # before passing to ensure_user() or any downstream rule_engine call.
+    user["dob"] = datetime.strptime(user["dob"], "%d-%m-%Y").strftime("%Y-%m-%d")
+
+    user_id = ensure_user(user, db_path)
+    start_date = get_last_fetched_date(user_id, db_path)
+
     all_results: list[EmailResult] = []
 
     while True:
-        batch = fetch_emails()
+        batch = fetch_emails(search_after=start_date)
         if not batch:
             break
 
         for email_data in batch:
+            existing = email_exists_in_db(
+                email_data["uid"],
+                email_data.get("message_id", ""),
+                user_id,
+                db_path,
+            )
+            if existing and existing["status"] in ("SUCCESS", "FAILURE_TERMINAL"):
+                logger.info(
+                    "uid=%s already processed (%s), skipping",
+                    email_data["uid"],
+                    existing["status"],
+                )
+                continue
+
             result = _process_single_email(email_data, user, output_dir)
             all_results.append(result)
             logger.info(
@@ -80,11 +116,14 @@ def run_pipeline(
                 result.status,
                 result.failure_reason,
             )
+
+            record_email_result(user_id, email_data, result, db_path)
+
             if _is_terminal(result):
                 mark_email_processed(email_data["uid"])
                 logger.info("Labeled uid=%s as processed (terminal)", result.uid)
 
-    commit_fetch_checkpoint()
+    update_last_fetched_date(user_id, datetime.now(_UTC), db_path)
     return all_results
 
 
@@ -287,11 +326,6 @@ def _aggregate_results(
     )
 
 
-# ---------------------------------------------------------------------------
-# Private helpers
-# ---------------------------------------------------------------------------
-
-
 def _load_user_profile(path: str) -> dict:
     """Load user profile from a JSON file.
 
@@ -352,3 +386,19 @@ def _is_terminal(result: EmailResult) -> bool:
     if result.status == "success":
         return True
     return result.failure_reason in _TERMINAL_FAILURE_REASONS
+
+
+def _resolve_email_status(result: EmailResult) -> str:
+    """Translate an EmailResult to a DB email status string.
+
+    Args:
+        result: EmailResult from the pipeline.
+
+    Returns:
+        One of SUCCESS / FAILURE_TERMINAL / FAILURE_RETRYABLE.
+    """
+    if result.status == "success":
+        return "SUCCESS"
+    if result.failure_reason in _TERMINAL_FAILURE_REASONS:
+        return "FAILURE_TERMINAL"
+    return "FAILURE_RETRYABLE"

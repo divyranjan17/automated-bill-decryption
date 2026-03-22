@@ -157,7 +157,6 @@ def test_fetch_emails_searches_for_unprocessed_messages(monkeypatch):
         "_utc_now",
         lambda: datetime(2026, 3, 17, 12, 0, tzinfo=timezone.utc),
     )
-    monkeypatch.setattr(module, "_read_checkpoint", lambda *_: None)
 
     module.fetch_emails()
 
@@ -170,23 +169,17 @@ def test_fetch_emails_searches_for_unprocessed_messages(monkeypatch):
     )
 
 
-def test_fetch_emails_uses_existing_checkpoint_for_incremental_search(
-    monkeypatch, tmp_path
+def test_fetch_emails_uses_search_after_parameter_for_incremental_search(
+    monkeypatch,
 ):
     fake_imap = FakeIMAP(
         search_uids=b"101",
         fetch_map={"101": _build_plain_text_message()},
     )
-    checkpoint_path = tmp_path / "data" / "email_fetch_checkpoint.txt"
-    checkpoint_path.parent.mkdir()
-    checkpoint_path.write_text("2026-03-10T09:30:00+00:00", encoding="utf-8")
-    module = _load_module(
-        monkeypatch,
-        fake_imap,
-        checkpoint_path=checkpoint_path,
-    )
+    module = _load_module(monkeypatch, fake_imap)
+    search_after = datetime(2026, 3, 10, 9, 30, tzinfo=timezone.utc)
 
-    module.fetch_emails()
+    module.fetch_emails(search_after=search_after)
 
     fake_imap.uid.assert_any_call(
         "SEARCH",
