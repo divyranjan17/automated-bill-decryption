@@ -13,7 +13,6 @@ from email.header import decode_header, make_header
 from email.message import Message
 from email.utils import parseaddr
 from html import unescape
-from pathlib import Path
 from typing import Optional
 
 try:
@@ -29,7 +28,6 @@ DEFAULT_PROCESSED_LABEL = "bill-processed"
 DEFAULT_CATEGORY = "primary"
 DEFAULT_MAX_EMAILS_PER_RUN = 50
 DEFAULT_LOOKBACK_CAP_DAYS = 365
-DEFAULT_CHECKPOINT_PATH = Path("data") / "email_fetch_checkpoint.txt"
 UNPROCESSED_SEARCH_TEMPLATE = 'after:{after_date} -label:{label} category:{category}'
 REQUIRED_KEYS = {
     "uid",
@@ -171,21 +169,6 @@ def mark_email_processed(uid: str) -> None:
         if status != "OK":
             logger.error("Failed to apply processed label to uid=%s", uid)
             raise RuntimeError("Unable to apply processed label")
-
-
-def commit_fetch_checkpoint(timestamp: Optional[datetime] = None) -> None:
-    """Persist the fetch checkpoint after a full pipeline run completes."""
-    checkpoint_path = Path(
-        os.getenv("EMAIL_CHECKPOINT_PATH", str(DEFAULT_CHECKPOINT_PATH))
-    )
-    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
-
-    checkpoint_value = _normalize_timestamp(timestamp or _utc_now())
-    checkpoint_path.write_text(
-        checkpoint_value.isoformat(),
-        encoding="utf-8",
-    )
-    logger.info("Committed fetch checkpoint to %s", checkpoint_path)
 
 
 def _load_config() -> dict:

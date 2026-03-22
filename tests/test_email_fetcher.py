@@ -84,7 +84,6 @@ def _load_module(
     monkeypatch,
     fake_imap,
     *,
-    checkpoint_path=None,
     max_emails_per_run="50",
     lookback_cap_days="365",
 ):
@@ -95,8 +94,6 @@ def _load_module(
     monkeypatch.setenv("EMAIL_PROCESSED_LABEL", "bill-processed")
     monkeypatch.setenv("MAX_EMAILS_PER_RUN", max_emails_per_run)
     monkeypatch.setenv("EMAIL_LOOKBACK_CAP_DAYS", lookback_cap_days)
-    if checkpoint_path is not None:
-        monkeypatch.setenv("EMAIL_CHECKPOINT_PATH", str(checkpoint_path))
 
     sys.modules.pop("email_fetcher", None)
     module = importlib.import_module("email_fetcher")
@@ -213,24 +210,6 @@ def test_fetch_emails_limits_processing_to_max_emails_per_run(
     ]
     assert [call.args[1] for call in fetch_calls] == ["101", "102"]
 
-
-def test_fetch_emails_does_not_update_checkpoint_during_ingestion(
-    monkeypatch, tmp_path
-):
-    fake_imap = FakeIMAP(
-        search_uids=b"101",
-        fetch_map={"101": _build_plain_text_message()},
-    )
-    checkpoint_path = tmp_path / "data" / "email_fetch_checkpoint.txt"
-    module = _load_module(
-        monkeypatch,
-        fake_imap,
-        checkpoint_path=checkpoint_path,
-    )
-
-    module.fetch_emails()
-
-    assert not checkpoint_path.exists()
 
 
 def test_fetch_emails_extracts_sender_subject_body_and_attachments(monkeypatch):
@@ -469,20 +448,3 @@ def test_fetch_emails_returns_pdf_attachments_contract(monkeypatch):
     assert messages[0]["pdf_filenames"] == ["statement.pdf"]
 
 
-def test_commit_fetch_checkpoint_writes_timestamp_to_data_path(
-    monkeypatch, tmp_path
-):
-    fake_imap = FakeIMAP()
-    checkpoint_path = tmp_path / "data" / "email_fetch_checkpoint.txt"
-    module = _load_module(
-        monkeypatch,
-        fake_imap,
-        checkpoint_path=checkpoint_path,
-    )
-    timestamp = datetime(2026, 3, 17, 12, 30, tzinfo=timezone.utc)
-
-    module.commit_fetch_checkpoint(timestamp)
-
-    assert checkpoint_path.read_text(encoding="utf-8").strip() == (
-        "2026-03-17T12:30:00+00:00"
-    )
