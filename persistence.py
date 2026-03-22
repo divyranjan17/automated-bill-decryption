@@ -13,6 +13,12 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import Optional
 
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    def load_dotenv() -> bool:
+        return False
+
 logger = logging.getLogger(__name__)
 
 _DEFAULT_DB_PATH = "data/bill_decryption.db"
@@ -146,6 +152,7 @@ def ensure_user(user_data: dict, db_path: str = _DEFAULT_DB_PATH) -> int:
     Raises:
         RuntimeError: If EMAIL_USERNAME environment variable is not set.
     """
+    load_dotenv()
     email = os.environ.get("EMAIL_USERNAME", "").strip()
     if not email:
         raise RuntimeError("Missing required environment variable: EMAIL_USERNAME")
@@ -303,11 +310,6 @@ def update_email_status(
         conn.close()
 
 
-# ---------------------------------------------------------------------------
-# Document CRUD
-# ---------------------------------------------------------------------------
-
-
 def insert_document(
     user_id: int,
     email_id: int,
@@ -370,11 +372,6 @@ def update_document_status(
         conn.commit()
     finally:
         conn.close()
-
-
-# ---------------------------------------------------------------------------
-# Attempt CRUD
-# ---------------------------------------------------------------------------
 
 
 def insert_attempt(
@@ -474,11 +471,6 @@ def update_last_fetched_date(
         conn.commit()
     finally:
         conn.close()
-
-
-# ---------------------------------------------------------------------------
-# High-level convenience
-# ---------------------------------------------------------------------------
 
 
 def record_email_result(
@@ -583,11 +575,6 @@ def record_email_result(
         )
     finally:
         conn.close()
-
-
-# ---------------------------------------------------------------------------
-# Private helpers
-# ---------------------------------------------------------------------------
 
 
 def _utc_now_iso() -> str:
