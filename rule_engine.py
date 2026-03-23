@@ -92,6 +92,7 @@ def build_candidate(rule: dict, user: dict) -> str:
     """
     parts: list[str] = []
     components = _get(rule, "components") or []
+    missing = [] # storing missing fields for prompting user for manual escalation
 
     for component in components:
         field = _get(component, "field")
@@ -99,7 +100,9 @@ def build_candidate(rule: dict, user: dict) -> str:
         field_str = field.value if hasattr(field, "value") else str(field)
 
         if field_str not in user:
-            raise ValueError(FailureReason.REQUIRED_USER_DATA_MISSING.value)
+            # raise ValueError(FailureReason.REQUIRED_USER_DATA_MISSING.value)
+            missing.append(field_str)
+            continue
 
         value: str = user[field_str]
 
@@ -128,6 +131,10 @@ def build_candidate(rule: dict, user: dict) -> str:
 
         parts.append(value)
 
+    if missing:
+        raise ValueError(
+            f"{FailureReason.REQUIRED_USER_DATA_MISSING.value}:{','.join(missing)}"
+        )
     separator = _get(rule, "separator") or ""
     return separator.join(parts)
 

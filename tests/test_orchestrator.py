@@ -109,6 +109,7 @@ def test_requires_static_password_returns_failure():
 
 
 def test_required_user_data_missing_returns_failure():
+    """Error without colon → else branch → immediate failure (no escalation)."""
     rule = {
         "components": [],
         "separator": "",
@@ -126,6 +127,107 @@ def test_required_user_data_missing_returns_failure():
              side_effect=ValueError(FailureReason.REQUIRED_USER_DATA_MISSING.value),
          ):
         result = _process_single_email(_email(), USER, "output")
+    assert result.status == "failure"
+    assert result.failure_reason == FailureReason.REQUIRED_USER_DATA_MISSING.value
+
+
+def test_missing_user_data_escalates_and_succeeds(tmp_path):
+    """Fields-in-error path: prompt fills data, retry succeeds → pipeline continues."""
+    rule = {
+        "components": [],
+        "separator": "",
+        "ambiguous": False,
+        "confidence": "high",
+        "reasoning": "",
+        "requires_static_password": False,
+        "fallback_candidates": [],
+    }
+    decrypt_result = {
+        "status": "success",
+        "output_path": str(tmp_path / "statement.pdf"),
+        "attempts": 1,
+    }
+    updated_user = {**USER, "pan": "XYZAB9876G"}
+    missing_error = ValueError(
+        f"{FailureReason.REQUIRED_USER_DATA_MISSING.value}:pan"
+    )
+
+    build_side_effects = [missing_error, ["XYZAB9876G"]]
+
+    with patch.object(orchestrator, "extract_password_hint", return_value="hint"), \
+         patch.object(orchestrator, "interpret_instruction", return_value=rule), \
+         patch.object(
+             orchestrator, "build_candidates", side_effect=build_side_effects
+         ), \
+         patch.object(
+             orchestrator, "prompt_missing_fields", return_value=updated_user
+         ), \
+         patch.object(orchestrator, "update_user_fields"), \
+         patch.object(orchestrator, "is_encrypted", return_value=True), \
+         patch.object(orchestrator, "decrypt_pdf", return_value=decrypt_result):
+        result = _process_single_email(_email(), USER, str(tmp_path))
+
+    assert result.status == "success"
+
+
+def test_missing_user_data_escalates_retry_fails():
+    """Retry build_candidates also raises → returns REQUIRED_USER_DATA_MISSING."""
+    rule = {
+        "components": [],
+        "separator": "",
+        "ambiguous": False,
+        "confidence": "high",
+        "reasoning": "",
+        "requires_static_password": False,
+        "fallback_candidates": [],
+    }
+    missing_error = ValueError(
+        f"{FailureReason.REQUIRED_USER_DATA_MISSING.value}:pan"
+    )
+    updated_user = {**USER, "pan": ""}
+
+    with patch.object(orchestrator, "extract_password_hint", return_value="hint"), \
+         patch.object(orchestrator, "interpret_instruction", return_value=rule), \
+         patch.object(
+             orchestrator,
+             "build_candidates",
+             side_effect=[missing_error, ValueError("still missing")],
+         ), \
+         patch.object(
+             orchestrator, "prompt_missing_fields", return_value=updated_user
+         ), \
+         patch.object(orchestrator, "update_user_fields"):
+        result = _process_single_email(_email(), USER, "output")
+
+    assert result.status == "failure"
+    assert result.failure_reason == FailureReason.REQUIRED_USER_DATA_MISSING.value
+    assert "still missing" in result.explanation
+
+
+def test_missing_user_data_no_fields_in_error_returns_failure():
+    """Error has no colon (old format) → no escalation, returns failure directly."""
+    rule = {
+        "components": [],
+        "separator": "",
+        "ambiguous": False,
+        "confidence": "high",
+        "reasoning": "",
+        "requires_static_password": False,
+        "fallback_candidates": [],
+    }
+    with patch.object(orchestrator, "extract_password_hint", return_value="hint"), \
+         patch.object(orchestrator, "interpret_instruction", return_value=rule), \
+         patch.object(
+             orchestrator,
+             "build_candidates",
+             side_effect=ValueError(FailureReason.REQUIRED_USER_DATA_MISSING.value),
+         ), \
+         patch.object(
+             orchestrator, "prompt_missing_fields"
+         ) as mock_prompt:
+        result = _process_single_email(_email(), USER, "output")
+
+    mock_prompt.assert_not_called()
     assert result.status == "failure"
     assert result.failure_reason == FailureReason.REQUIRED_USER_DATA_MISSING.value
 

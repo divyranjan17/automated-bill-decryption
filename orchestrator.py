@@ -19,6 +19,7 @@ _UTC = timezone.utc
 from decryptor import decrypt_pdf, is_encrypted
 from email_fetcher import fetch_emails, mark_email_processed
 from interpreter import extract_password_hint, interpret_instruction
+from handle_missing_user_data import prompt_missing_fields
 from persistence import (
     email_exists as email_exists_in_db,
     ensure_user,
@@ -26,6 +27,7 @@ from persistence import (
     init_db,
     record_email_result,
     update_last_fetched_date,
+    update_user_fields,
 )
 from rule_engine import build_candidates
 from src.constants.failure_reasons import FailureReason
@@ -129,7 +131,10 @@ def run_pipeline(
                 )
                 continue
 
-            result = _process_single_email(email_data, user, output_dir)
+            result = _process_single_email(
+                email_data, user, output_dir,
+                user_id=user_id, db_path=db_path,
+            )
             all_results.append(result)
 
             record_email_result(user_id, email_data, result, db_path)
@@ -163,7 +168,11 @@ def run_pipeline(
 
 
 def _process_single_email(
-    email_data: dict, user: dict, output_dir: str
+    email_data: dict,
+    user: dict,
+    output_dir: str,
+    user_id: Optional[int] = None,
+    db_path: Optional[str] = None,
 ) -> EmailResult:
     """Run the full pipeline for one email.
 
@@ -266,17 +275,46 @@ def _process_single_email(
     try:
         candidates = build_candidates(rule, user)
     except ValueError as exc:
-        logger.warning(
-            _format_log_event(PipelineEvent.USER_DATA_MISSING, uid=uid)
-        )
-        return EmailResult(
-            uid=uid,
-            sender=sender,
-            subject=subject,
-            status="failure",
-            failure_reason=FailureReason.REQUIRED_USER_DATA_MISSING.value,
-            explanation=f"Required user data missing: {exc}",
-        )
+        reason, _, fields_str = str(exc).partition(":")
+        if reason == FailureReason.REQUIRED_USER_DATA_MISSING.value and fields_str:
+            missing_fields = fields_str.split(",")
+            logger.warning(
+                _format_log_event(
+                    PipelineEvent.USER_DATA_MISSING, uid=uid, missing=fields_str
+                )
+            )
+            updated_user = prompt_missing_fields(missing_fields, user)
+            if user_id is not None and db_path:
+                update_user_fields(user_id, updated_user, db_path)
+            try:
+                candidates = build_candidates(rule, updated_user)
+            except ValueError:
+                logger.warning(
+                    _format_log_event(
+                        PipelineEvent.USER_DATA_MISSING, uid=uid, retry=True
+                    )
+                )
+                return EmailResult(
+                    uid=uid,
+                    sender=sender,
+                    subject=subject,
+                    status="failure",
+                    failure_reason=FailureReason.REQUIRED_USER_DATA_MISSING.value,
+                    explanation="Required user data still missing after prompt.",
+                )
+            # fall through to Step 6 with updated candidates
+        else:
+            logger.warning(
+                _format_log_event(PipelineEvent.USER_DATA_MISSING, uid=uid)
+            )
+            return EmailResult(
+                uid=uid,
+                sender=sender,
+                subject=subject,
+                status="failure",
+                failure_reason=FailureReason.REQUIRED_USER_DATA_MISSING.value,
+                explanation=f"Required user data missing: {exc}",
+            )
 
     logger.info(
         _format_log_event(

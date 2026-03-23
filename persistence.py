@@ -577,6 +577,43 @@ def record_email_result(
         conn.close()
 
 
+_ALLOWED_USER_COLUMNS: frozenset[str] = frozenset(
+    {"name", "dob", "mobile", "pan", "card_masked", "account_masked"}
+)
+
+
+def update_user_fields(
+    user_id: int,
+    updates: dict,
+    db_path: str = _DEFAULT_DB_PATH,
+) -> None:
+    """Update specific columns on the user row.
+
+    Only columns present in ALLOWED_USER_COLUMNS are written; unknown
+    keys are silently ignored. No-op if ``updates`` is empty after
+    filtering.
+
+    Args:
+        user_id: The id of the user row to update.
+        updates: Dict mapping column names to new values.
+        db_path: Path to the SQLite database file.
+    """
+    safe = {k: v for k, v in updates.items() if k in _ALLOWED_USER_COLUMNS}
+    if not safe:
+        return
+
+    set_clause = ", ".join(f"{col} = ?" for col in safe)
+    values = list(safe.values()) + [user_id]
+
+    conn = _get_connection(db_path)
+    try:
+        conn.execute(f"UPDATE user SET {set_clause} WHERE id = ?", values)
+        conn.commit()
+        logger.info("Updated user id=%d columns=%s", user_id, list(safe))
+    finally:
+        conn.close()
+
+
 def _utc_now_iso() -> str:
     """Return the current UTC time as an ISO 8601 string."""
     return datetime.now(timezone.utc).isoformat()

@@ -27,6 +27,7 @@ from persistence import (
     update_document_status,
     update_email_status,
     update_last_fetched_date,
+    update_user_fields,
 )
 
 
@@ -580,6 +581,50 @@ class TestRecordEmailResult:
         assert email_count == 1
         assert doc_count == 0
 
+# ---------------------------------------------------------------------------
+# update_user_fields
+# ---------------------------------------------------------------------------
+
+
+class TestUpdateUserFields:
+    def test_updates_allowed_columns(self, tmp_path):
+        db_path = _make_db(tmp_path)
+        user_id = _seed_user(db_path)
+        update_user_fields(user_id, {"mobile": "1234567890", "pan": "ZZZZZ9999Z"}, db_path)
+        conn = _get_connection(db_path)
+        try:
+            row = conn.execute("SELECT mobile, pan FROM user WHERE id = ?", (user_id,)).fetchone()
+        finally:
+            conn.close()
+        assert row["mobile"] == "1234567890"
+        assert row["pan"] == "ZZZZZ9999Z"
+
+    def test_ignores_unknown_keys(self, tmp_path):
+        db_path = _make_db(tmp_path)
+        user_id = _seed_user(db_path)
+        # customer_id is not an allowed column — should be silently dropped
+        update_user_fields(user_id, {"mobile": "0000000000", "customer_id": "abc"}, db_path)
+        conn = _get_connection(db_path)
+        try:
+            row = conn.execute("SELECT mobile FROM user WHERE id = ?", (user_id,)).fetchone()
+        finally:
+            conn.close()
+        assert row["mobile"] == "0000000000"
+
+    def test_empty_dict_is_noop(self, tmp_path):
+        db_path = _make_db(tmp_path)
+        user_id = _seed_user(db_path)
+        # Should not raise and original values unchanged
+        update_user_fields(user_id, {}, db_path)
+        conn = _get_connection(db_path)
+        try:
+            row = conn.execute("SELECT name FROM user WHERE id = ?", (user_id,)).fetchone()
+        finally:
+            conn.close()
+        assert row["name"] == _USER_DATA["name"]
+
+
+class TestRecordEmailResultEncryption:
     def test_pdf_not_encrypted_is_not_encrypted_0(self, tmp_path):
         db_path = _make_db(tmp_path)
         user_id = _seed_user(db_path)
