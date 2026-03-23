@@ -29,8 +29,26 @@ from persistence import (
 )
 from rule_engine import build_candidates
 from src.constants.failure_reasons import FailureReason
+from src.constants.log_events import PipelineEvent
 
 logger = logging.getLogger(__name__)
+
+
+def _format_log_event(event: PipelineEvent, **kwargs) -> str:
+    """Format a logfmt-style key=value log message.
+
+    Args:
+        event: The pipeline boundary event to log.
+        **kwargs: Additional key=value fields to include.
+
+    Returns:
+        A logfmt-formatted string, e.g. ``event=EMAIL_START uid=abc sender=x``.
+    """
+    parts = [f"event={event.value}"]
+    for k, v in kwargs.items():
+        s = str(v)
+        parts.append(f'{k}="{s}"' if " " in s else f"{k}={s}")
+    return " ".join(parts)
 
 _TERMINAL_FAILURE_REASONS: set[str] = {
     "success",
@@ -84,6 +102,7 @@ def run_pipeline(
     user["dob"] = datetime.strptime(user["dob"], "%d-%m-%Y").strftime("%Y-%m-%d")
 
     user_id = ensure_user(user, db_path)
+    logger.info(_format_log_event(PipelineEvent.PIPELINE_START, user_id=user_id))
     start_date = get_last_fetched_date(user_id, db_path)
 
     all_results: list[EmailResult] = []
@@ -102,27 +121,43 @@ def run_pipeline(
             )
             if existing and existing["status"] in ("SUCCESS", "FAILURE_TERMINAL"):
                 logger.info(
-                    "uid=%s already processed (%s), skipping",
-                    email_data["uid"],
-                    existing["status"],
+                    _format_log_event(
+                        PipelineEvent.EMAIL_SKIP,
+                        uid=email_data["uid"],
+                        status=existing["status"],
+                    )
                 )
                 continue
 
             result = _process_single_email(email_data, user, output_dir)
             all_results.append(result)
-            logger.info(
-                "uid=%s status=%s failure_reason=%s",
-                result.uid,
-                result.status,
-                result.failure_reason,
-            )
 
             record_email_result(user_id, email_data, result, db_path)
+            logger.info(
+                _format_log_event(
+                    PipelineEvent.EMAIL_DONE,
+                    uid=result.uid,
+                    status=result.status,
+                    failure_reason=result.failure_reason,
+                )
+            )
 
             if _is_terminal(result):
                 mark_email_processed(email_data["uid"])
-                logger.info("Labeled uid=%s as processed (terminal)", result.uid)
+                logger.info(
+                    _format_log_event(PipelineEvent.EMAIL_LABELED, uid=result.uid)
+                )
 
+    success_count = sum(1 for r in all_results if r.status == "success")
+    failed_count = len(all_results) - success_count
+    logger.info(
+        _format_log_event(
+            PipelineEvent.PIPELINE_DONE,
+            total=len(all_results),
+            success=success_count,
+            failed=failed_count,
+        )
+    )
     update_last_fetched_date(user_id, datetime.now(_UTC), db_path)
     return all_results
 
@@ -147,6 +182,15 @@ def _process_single_email(
     pdf_attachments: list[bytes] = email_data["pdf_attachments"]
     pdf_filenames: list[str] = email_data["pdf_filenames"]
 
+    logger.info(
+        _format_log_event(
+            PipelineEvent.EMAIL_START,
+            uid=uid,
+            sender=sender,
+            pdfs=len(pdf_attachments),
+        )
+    )
+
     # Step 1: No PDF attachments
     if not pdf_attachments:
         return EmailResult(
@@ -161,6 +205,7 @@ def _process_single_email(
     # Step 2: Extract password hint
     hint = extract_password_hint(body_text)
     if hint is None:
+        logger.info(_format_log_event(PipelineEvent.HINT_NOT_FOUND, uid=uid))
         return EmailResult(
             uid=uid,
             sender=sender,
@@ -170,10 +215,22 @@ def _process_single_email(
             explanation="No password hint found in email body.",
         )
 
+    logger.info(
+        _format_log_event(
+            PipelineEvent.HINT_EXTRACTED,
+            uid=uid,
+            hint_found=True,
+            hint_length=len(hint),
+        )
+    )
+
     # Step 3: Parse hint into rule
     try:
         rule = interpret_instruction(hint, user)
     except ValueError as exc:
+        logger.warning(
+            _format_log_event(PipelineEvent.RULE_FAILED, uid=uid, reason=exc)
+        )
         return EmailResult(
             uid=uid,
             sender=sender,
@@ -183,8 +240,19 @@ def _process_single_email(
             explanation=f"Hint found but could not be parsed: {exc}",
         )
 
+    logger.info(
+        _format_log_event(
+            PipelineEvent.RULE_BUILT,
+            uid=uid,
+            components=len(rule.get("components", [])),
+            ambiguous=rule.get("ambiguous", False),
+            confidence=rule.get("confidence", "unknown"),
+        )
+    )
+
     # Step 4: Check for static password requirement
     if rule.get("requires_static_password"):
+        logger.info(_format_log_event(PipelineEvent.STATIC_PASSWORD, uid=uid))
         return EmailResult(
             uid=uid,
             sender=sender,
@@ -198,6 +266,9 @@ def _process_single_email(
     try:
         candidates = build_candidates(rule, user)
     except ValueError as exc:
+        logger.warning(
+            _format_log_event(PipelineEvent.USER_DATA_MISSING, uid=uid)
+        )
         return EmailResult(
             uid=uid,
             sender=sender,
@@ -207,11 +278,17 @@ def _process_single_email(
             explanation=f"Required user data missing: {exc}",
         )
 
+    logger.info(
+        _format_log_event(
+            PipelineEvent.CANDIDATES_BUILT, uid=uid, count=len(candidates)
+        )
+    )
+
     # Step 6: Attempt decryption for each PDF
     pdf_results: list[PdfResult] = []
     for pdf_bytes, pdf_filename in zip(pdf_attachments, pdf_filenames):
         pdf_result = _process_pdf(
-            pdf_bytes, pdf_filename, sender, candidates, output_dir
+            pdf_bytes, pdf_filename, sender, candidates, output_dir, uid
         )
         pdf_results.append(pdf_result)
 
@@ -225,6 +302,7 @@ def _process_pdf(
     sender: str,
     candidates: list[str],
     output_dir: str,
+    uid: str,
 ) -> PdfResult:
     """Attempt to decrypt a single PDF using the candidate password list.
 
@@ -234,12 +312,17 @@ def _process_pdf(
         sender: Email address of the sender (used for output path).
         candidates: Ordered list of candidate passwords to try.
         output_dir: Root directory for decrypted PDFs.
+        uid: Correlation key from the parent email (used in log events).
 
     Returns:
         PdfResult with decryption outcome.
     """
     if not is_encrypted(pdf_bytes):
-        logger.info("pdf=%s is not encrypted; skipping", pdf_filename)
+        logger.info(
+            _format_log_event(
+                PipelineEvent.PDF_NOT_ENCRYPTED, uid=uid, file=pdf_filename
+            )
+        )
         return PdfResult(
             filename=pdf_filename,
             status="failure",
@@ -257,15 +340,25 @@ def _process_pdf(
 
     try:
         for i, candidate in enumerate(candidates):
-            result = decrypt_pdf(temp_path, candidate, output_path)
             logger.info(
-                "pdf=%s candidate=%d/%d status=%s",
-                pdf_filename,
-                i + 1,
-                len(candidates),
-                result["status"],
+                _format_log_event(
+                    PipelineEvent.DECRYPT_ATTEMPT,
+                    uid=uid,
+                    file=pdf_filename,
+                    attempt=i + 1,
+                    total=len(candidates),
+                )
             )
+            result = decrypt_pdf(temp_path, candidate, output_path)
             if result["status"] == "success":
+                logger.info(
+                    _format_log_event(
+                        PipelineEvent.DECRYPT_SUCCESS,
+                        uid=uid,
+                        file=pdf_filename,
+                        output=result["output_path"],
+                    )
+                )
                 return PdfResult(
                     filename=pdf_filename,
                     status="success",
@@ -279,6 +372,14 @@ def _process_pdf(
         except OSError:
             pass
 
+    logger.warning(
+        _format_log_event(
+            PipelineEvent.DECRYPT_EXHAUSTED,
+            uid=uid,
+            file=pdf_filename,
+            candidates_tried=len(candidates),
+        )
+    )
     return PdfResult(
         filename=pdf_filename,
         status="failure",

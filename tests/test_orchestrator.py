@@ -510,3 +510,117 @@ def test_aggregate_results_empty_pdf_list_returns_failure():
     result = _aggregate_results("1", "s@example.com", "sub", [])
     assert result.status == "failure"
     assert result.failure_reason == FailureReason.CANDIDATE_LIST_EXHAUSTED.value
+
+
+# ---------------------------------------------------------------------------
+# Structured logging — caplog assertions
+# ---------------------------------------------------------------------------
+
+
+def test_happy_path_emits_structured_events_in_order(tmp_path, caplog):
+    """Happy path run emits all key structured events and in correct order."""
+    import logging
+    profile_path = tmp_path / "profile.json"
+    profile_path.write_text(json.dumps(_PROFILE_DATA), encoding="utf-8")
+
+    uid = "501"
+    email = _email(uid=uid)
+
+    rule = {
+        "components": [{"field": "name"}],
+        "separator": "",
+        "ambiguous": False,
+        "confidence": "high",
+        "reasoning": "",
+        "requires_static_password": False,
+        "fallback_candidates": [],
+    }
+    decrypt_result = {
+        "status": "success",
+        "output_path": str(tmp_path / "statement.pdf"),
+        "attempts": 1,
+    }
+
+    with caplog.at_level(logging.INFO, logger="orchestrator"), \
+         patch.object(orchestrator, "init_db"), \
+         patch.object(orchestrator, "ensure_user", return_value=7), \
+         patch.object(orchestrator, "get_last_fetched_date", return_value=None), \
+         patch.object(orchestrator, "email_exists_in_db", return_value=None), \
+         patch.object(orchestrator, "record_email_result"), \
+         patch.object(orchestrator, "update_last_fetched_date"), \
+         patch.object(orchestrator, "fetch_emails", side_effect=[[email], []]), \
+         patch.object(orchestrator, "mark_email_processed"), \
+         patch.object(orchestrator, "extract_password_hint", return_value="hint text"), \
+         patch.object(orchestrator, "interpret_instruction", return_value=rule), \
+         patch.object(orchestrator, "build_candidates", return_value=["JOHN1990"]), \
+         patch.object(orchestrator, "is_encrypted", return_value=True), \
+         patch.object(orchestrator, "decrypt_pdf", return_value=decrypt_result):
+        run_pipeline(
+            output_dir=str(tmp_path / "output"),
+            profile_path=str(profile_path),
+        )
+
+    text = caplog.text
+    expected_events = [
+        "event=PIPELINE_START",
+        "event=EMAIL_START",
+        "event=HINT_EXTRACTED",
+        "event=RULE_BUILT",
+        "event=CANDIDATES_BUILT",
+        "event=DECRYPT_ATTEMPT",
+        "event=DECRYPT_SUCCESS",
+        "event=EMAIL_DONE",
+        "event=EMAIL_LABELED",
+        "event=PIPELINE_DONE",
+    ]
+    for event_str in expected_events:
+        assert event_str in text, f"Expected '{event_str}' in caplog output"
+
+    # Ordering invariant: EMAIL_DONE must precede EMAIL_LABELED for same uid
+    done_marker = f"event=EMAIL_DONE uid={uid}"
+    labeled_marker = f"event=EMAIL_LABELED uid={uid}"
+    assert done_marker in text, f"Expected '{done_marker}' in caplog output"
+    assert labeled_marker in text, f"Expected '{labeled_marker}' in caplog output"
+    assert text.index(done_marker) < text.index(labeled_marker), (
+        "EMAIL_DONE must appear before EMAIL_LABELED for the same uid"
+    )
+
+
+def test_no_pdf_attachment_emits_structured_events_in_order(tmp_path, caplog):
+    """NO_PDF_ATTACHMENT terminal failure emits EMAIL_START, EMAIL_DONE, EMAIL_LABELED in order."""
+    import logging
+    profile_path = tmp_path / "profile.json"
+    profile_path.write_text(json.dumps(_PROFILE_DATA), encoding="utf-8")
+
+    uid = "601"
+    email = _email(uid=uid, pdf_attachments=[], pdf_filenames=[])
+
+    with caplog.at_level(logging.INFO, logger="orchestrator"), \
+         patch.object(orchestrator, "init_db"), \
+         patch.object(orchestrator, "ensure_user", return_value=7), \
+         patch.object(orchestrator, "get_last_fetched_date", return_value=None), \
+         patch.object(orchestrator, "email_exists_in_db", return_value=None), \
+         patch.object(orchestrator, "record_email_result"), \
+         patch.object(orchestrator, "update_last_fetched_date"), \
+         patch.object(orchestrator, "fetch_emails", side_effect=[[email], []]), \
+         patch.object(orchestrator, "mark_email_processed"):
+        run_pipeline(
+            output_dir=str(tmp_path / "output"),
+            profile_path=str(profile_path),
+        )
+
+    text = caplog.text
+
+    # All three key events must appear
+    assert "event=EMAIL_START" in text
+    assert f"failure_reason=NO_PDF_ATTACHMENT" in text
+    assert "event=EMAIL_LABELED" in text
+
+    # Ordering invariant: EMAIL_DONE must precede EMAIL_LABELED for same uid
+    done_marker = f"event=EMAIL_DONE uid={uid}"
+    labeled_marker = f"event=EMAIL_LABELED uid={uid}"
+    assert done_marker in text, f"Expected '{done_marker}' in caplog output"
+    assert labeled_marker in text, f"Expected '{labeled_marker}' in caplog output"
+    assert text.index(done_marker) < text.index(labeled_marker), (
+        "EMAIL_DONE must appear before EMAIL_LABELED for the same uid"
+    )
