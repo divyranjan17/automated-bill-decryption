@@ -376,6 +376,7 @@ def test_is_terminal_true_for_success():
         FailureReason.PDF_NOT_ENCRYPTED.value,
         FailureReason.INVALID_RULE.value,
         FailureReason.REQUIRES_STATIC_PASSWORD.value,
+        FailureReason.NO_PASSWORD_HINT_FOUND.value,
     ],
 )
 def test_is_terminal_true_for_terminal_failures(failure_reason):
@@ -391,7 +392,6 @@ def test_is_terminal_true_for_terminal_failures(failure_reason):
     [
         FailureReason.CANDIDATE_LIST_EXHAUSTED.value,
         FailureReason.REQUIRED_USER_DATA_MISSING.value,
-        FailureReason.NO_PASSWORD_HINT_FOUND.value,
         FailureReason.HINT_FOUND_BUT_UNPARSABLE.value,
     ],
 )
@@ -531,6 +531,7 @@ def test_resolve_email_status_success():
         FailureReason.PDF_NOT_ENCRYPTED.value,
         FailureReason.INVALID_RULE.value,
         FailureReason.REQUIRES_STATIC_PASSWORD.value,
+        FailureReason.NO_PASSWORD_HINT_FOUND.value,
     ],
 )
 def test_resolve_email_status_terminal(failure_reason):
@@ -546,7 +547,6 @@ def test_resolve_email_status_terminal(failure_reason):
     [
         FailureReason.CANDIDATE_LIST_EXHAUSTED.value,
         FailureReason.REQUIRED_USER_DATA_MISSING.value,
-        FailureReason.NO_PASSWORD_HINT_FOUND.value,
         FailureReason.HINT_FOUND_BUT_UNPARSABLE.value,
     ],
 )

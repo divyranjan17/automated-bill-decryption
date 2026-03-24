@@ -51,7 +51,7 @@ def fetch_emails(search_after: Optional[datetime] = None) -> list[dict]:
         List of normalized email dicts.
     """
     config = _load_config()
-    logger.info("Connecting to IMAP host %s", config["host"])
+    logger.info(f"Connecting to IMAP host {config["host"]}, search_after:{search_after}")
 
     if search_after is not None:
         search_start = search_after

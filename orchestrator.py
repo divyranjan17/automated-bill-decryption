@@ -59,6 +59,7 @@ _TERMINAL_FAILURE_REASONS: set[str] = {
     FailureReason.PDF_NOT_ENCRYPTED.value,
     FailureReason.INVALID_RULE.value,
     FailureReason.REQUIRES_STATIC_PASSWORD.value,
+    FailureReason.NO_PASSWORD_HINT_FOUND.value,
 }
 
 

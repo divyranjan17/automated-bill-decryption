@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -646,3 +646,89 @@ class TestRecordEmailResultEncryption:
         finally:
             conn.close()
         assert doc["is_encrypted"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Upsert behaviour — no pikepdf dependency (orchestrator is mocked)
+# ---------------------------------------------------------------------------
+
+
+def _record_with_status(user_id, email_data, db_path, db_status, failure_reason=None):
+    """Call record_email_result with a mocked orchestrator to avoid pikepdf."""
+    mock_orch = MagicMock()
+    mock_orch._resolve_email_status.return_value = db_status
+    result = MagicMock()
+    result.failure_reason = failure_reason
+    result.pdf_results = []
+    with patch.dict(sys.modules, {"orchestrator": mock_orch}):
+        record_email_result(user_id, email_data, result, db_path)
+
+
+class TestRecordEmailResultUpsert:
+    """Verify the upsert logic: UPDATE on retry, INSERT on first write."""
+
+    _EMAIL = {
+        "uid": "999",
+        "message_id": "<999@example.com>",
+        "sender": "bank@example.com",
+        "subject": "Bill",
+    }
+
+    def test_fresh_email_inserts_row(self, tmp_path):
+        db_path = _make_db(tmp_path)
+        user_id = _seed_user(db_path)
+
+        _record_with_status(user_id, self._EMAIL, db_path, "SUCCESS")
+
+        conn = _get_connection(db_path)
+        try:
+            row = conn.execute(
+                "SELECT status FROM email WHERE uid = '999'"
+            ).fetchone()
+        finally:
+            conn.close()
+        assert row["status"] == "SUCCESS"
+
+    def test_retryable_retry_does_not_duplicate_row(self, tmp_path):
+        db_path = _make_db(tmp_path)
+        user_id = _seed_user(db_path)
+
+        # First run — FAILURE_RETRYABLE
+        _record_with_status(
+            user_id, self._EMAIL, db_path, "FAILURE_RETRYABLE",
+            failure_reason="CANDIDATE_LIST_EXHAUSTED",
+        )
+        # Second run — same email, should UPDATE not crash
+        _record_with_status(
+            user_id, self._EMAIL, db_path, "FAILURE_RETRYABLE",
+            failure_reason="CANDIDATE_LIST_EXHAUSTED",
+        )
+
+        conn = _get_connection(db_path)
+        try:
+            count = conn.execute(
+                "SELECT COUNT(*) AS n FROM email WHERE uid = '999'"
+            ).fetchone()["n"]
+        finally:
+            conn.close()
+        assert count == 1
+
+    def test_retryable_retry_updates_status_to_success(self, tmp_path):
+        db_path = _make_db(tmp_path)
+        user_id = _seed_user(db_path)
+
+        _record_with_status(
+            user_id, self._EMAIL, db_path, "FAILURE_RETRYABLE",
+            failure_reason="CANDIDATE_LIST_EXHAUSTED",
+        )
+        _record_with_status(user_id, self._EMAIL, db_path, "SUCCESS")
+
+        conn = _get_connection(db_path)
+        try:
+            row = conn.execute(
+                "SELECT status, failure_reason FROM email WHERE uid = '999'"
+            ).fetchone()
+        finally:
+            conn.close()
+        assert row["status"] == "SUCCESS"
+        assert row["failure_reason"] is None

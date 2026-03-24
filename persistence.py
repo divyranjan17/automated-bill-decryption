@@ -500,26 +500,53 @@ def record_email_result(
     conn = _get_connection(db_path)
     try:
         with conn:
-            email_cursor = conn.execute(
+            existing_row = conn.execute(
                 """
-                INSERT INTO email
-                    (user_id, uid, message_id, sender, subject, received_at,
-                     status, failure_reason, processed_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                SELECT id FROM email
+                WHERE (uid = ? AND user_id = ?)
+                   OR (message_id IS NOT NULL AND message_id != ''
+                       AND message_id = ? AND user_id = ?)
+                LIMIT 1
                 """,
                 (
-                    user_id,
                     email_data.get("uid"),
+                    user_id,
                     email_data.get("message_id"),
-                    email_data.get("sender"),
-                    email_data.get("subject"),
-                    None,  # received_at not available in current email_data
-                    email_status,
-                    failure_reason,
-                    _utc_now_iso(),
+                    user_id,
                 ),
-            )
-            email_id = email_cursor.lastrowid
+            ).fetchone()
+
+            if existing_row:
+                email_id = existing_row["id"]
+                conn.execute(
+                    """
+                    UPDATE email
+                    SET status = ?, failure_reason = ?, processed_at = ?
+                    WHERE id = ?
+                    """,
+                    (email_status, failure_reason, _utc_now_iso(), email_id),
+                )
+            else:
+                email_cursor = conn.execute(
+                    """
+                    INSERT INTO email
+                        (user_id, uid, message_id, sender, subject, received_at,
+                         status, failure_reason, processed_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        user_id,
+                        email_data.get("uid"),
+                        email_data.get("message_id"),
+                        email_data.get("sender"),
+                        email_data.get("subject"),
+                        None,  # received_at not available in current email_data
+                        email_status,
+                        failure_reason,
+                        _utc_now_iso(),
+                    ),
+                )
+                email_id = email_cursor.lastrowid
 
             for pdf_result in result.pdf_results:
                 is_encrypted = (
