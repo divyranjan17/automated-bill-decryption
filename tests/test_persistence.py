@@ -139,9 +139,8 @@ class TestEnsureUser:
 
     def test_raises_if_email_env_missing(self, tmp_path):
         db_path = _make_db(tmp_path)
-        with patch.dict("os.environ", {}, clear=True):
-            import os
-            os.environ.pop("EMAIL_USERNAME", None)
+        with patch.dict("os.environ", {}, clear=True), \
+             patch("persistence.load_dotenv"):
             with pytest.raises(RuntimeError, match="EMAIL_USERNAME"):
                 ensure_user(_USER_DATA, db_path)
 
