@@ -85,7 +85,7 @@ def fetch_emails(search_after: Optional[datetime] = None) -> list[dict]:
             return []
 
         candidate_uids = _parse_search_uids(search_data)
-        selected_uids = candidate_uids[: config["max_emails_per_run"]]
+        selected_uids = candidate_uids
         logger.info(
             "Fetched %s candidate UIDs for mailbox %s; processing %s",
             len(candidate_uids),

@@ -26,6 +26,7 @@ from persistence import (
     get_last_fetched_date,
     init_db,
     record_email_result,
+    update_email_status,
     update_last_fetched_date,
     update_user_fields,
 )
@@ -61,6 +62,8 @@ _TERMINAL_FAILURE_REASONS: set[str] = {
     FailureReason.REQUIRES_STATIC_PASSWORD.value,
     FailureReason.NO_PASSWORD_HINT_FOUND.value,
 }
+
+MAX_RETRIES: int = 3
 
 
 @dataclass
@@ -110,19 +113,16 @@ def run_pipeline(
 
     all_results: list[EmailResult] = []
 
-    while True:
-        batch = fetch_emails(search_after=start_date)
-        if not batch:
-            break
-
-        for email_data in batch:
-            existing = email_exists_in_db(
-                email_data["uid"],
-                email_data.get("message_id", ""),
-                user_id,
-                db_path,
-            )
-            if existing and existing["status"] in ("SUCCESS", "FAILURE_TERMINAL"):
+    batch = fetch_emails(search_after=start_date)
+    for email_data in batch:
+        existing = email_exists_in_db(
+            email_data["uid"],
+            email_data.get("message_id", ""),
+            user_id,
+            db_path,
+        )
+        if existing:
+            if existing["status"] in ("SUCCESS", "FAILURE_TERMINAL"):
                 logger.info(
                     _format_log_event(
                         PipelineEvent.EMAIL_SKIP,
@@ -132,27 +132,48 @@ def run_pipeline(
                 )
                 continue
 
-            result = _process_single_email(
-                email_data, user, output_dir,
-                user_id=user_id, db_path=db_path,
-            )
-            all_results.append(result)
+            if (
+                existing["status"] == "FAILURE_RETRYABLE"
+                and existing["retry_count"] >= MAX_RETRIES
+            ):
+                update_email_status(
+                    existing["id"],
+                    "FAILURE_TERMINAL",
+                    failure_reason=FailureReason.MAX_RETRIES_EXCEEDED.value,
+                    db_path=db_path,
+                )
+                logger.warning(
+                    _format_log_event(
+                        PipelineEvent.EMAIL_SKIP,
+                        uid=email_data["uid"],
+                        status="FAILURE_TERMINAL",
+                        reason="MAX_RETRIES_EXCEEDED",
+                        retry_count=existing["retry_count"],
+                    )
+                )
+                continue
 
-            record_email_result(user_id, email_data, result, db_path)
+        result = _process_single_email(
+            email_data, user, output_dir,
+            user_id=user_id, db_path=db_path,
+        )
+        all_results.append(result)
+
+        record_email_result(user_id, email_data, result, db_path)
+        logger.info(
+            _format_log_event(
+                PipelineEvent.EMAIL_DONE,
+                uid=result.uid,
+                status=result.status,
+                failure_reason=result.failure_reason,
+            )
+        )
+
+        if _is_terminal(result):
+            mark_email_processed(email_data["uid"])
             logger.info(
-                _format_log_event(
-                    PipelineEvent.EMAIL_DONE,
-                    uid=result.uid,
-                    status=result.status,
-                    failure_reason=result.failure_reason,
-                )
+                _format_log_event(PipelineEvent.EMAIL_LABELED, uid=result.uid)
             )
-
-            if _is_terminal(result):
-                mark_email_processed(email_data["uid"])
-                logger.info(
-                    _format_log_event(PipelineEvent.EMAIL_LABELED, uid=result.uid)
-                )
 
     success_count = sum(1 for r in all_results if r.status == "success")
     failed_count = len(all_results) - success_count

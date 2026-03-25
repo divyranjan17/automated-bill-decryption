@@ -80,6 +80,7 @@ def init_db(db_path: str = _DEFAULT_DB_PATH) -> None:
             created_at      TEXT    NOT NULL
                 DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
             processed_at    TEXT,
+            retry_count     INTEGER NOT NULL DEFAULT 0,
             UNIQUE(uid, user_id),
             UNIQUE(message_id, user_id)
         )
@@ -130,6 +131,14 @@ def init_db(db_path: str = _DEFAULT_DB_PATH) -> None:
         for stmt in ddl_statements:
             conn.execute(stmt)
         conn.commit()
+        # Migration: add retry_count if column doesn't exist yet (existing databases)
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(email)").fetchall()}
+        if "retry_count" not in cols:
+            conn.execute(
+                "ALTER TABLE email ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0"
+            )
+            conn.commit()
+            logger.info("Migration applied: added retry_count column to email table")
         logger.info("Database initialized at %s", db_path)
     finally:
         conn.close()
@@ -204,13 +213,13 @@ def email_exists(
         db_path: Path to the SQLite database file.
 
     Returns:
-        Dict with keys id, status, failure_reason if found; else None.
+        Dict with keys id, status, failure_reason, retry_count if found; else None.
     """
     conn = _get_connection(db_path)
     try:
         row = conn.execute(
             """
-            SELECT id, status, failure_reason
+            SELECT id, status, failure_reason, retry_count
             FROM email
             WHERE (uid = ? AND user_id = ?)
                OR (message_id = ? AND message_id != '' AND user_id = ?)
@@ -224,6 +233,7 @@ def email_exists(
             "id": row["id"],
             "status": row["status"],
             "failure_reason": row["failure_reason"],
+            "retry_count": row["retry_count"],
         }
     finally:
         conn.close()
@@ -516,15 +526,23 @@ def record_email_result(
                 ),
             ).fetchone()
 
-            if existing_row:
+            if existing_row: # adding provision to update existing row in case of retries
                 email_id = existing_row["id"]
                 conn.execute(
                     """
                     UPDATE email
-                    SET status = ?, failure_reason = ?, processed_at = ?
+                    SET status         = ?,
+                        failure_reason = ?,
+                        processed_at   = ?,
+                        retry_count    = CASE
+                                             WHEN status = 'FAILURE_RETRYABLE'
+                                              AND ? = 'FAILURE_RETRYABLE'
+                                             THEN retry_count + 1
+                                             ELSE retry_count
+                                         END
                     WHERE id = ?
                     """,
-                    (email_status, failure_reason, _utc_now_iso(), email_id),
+                    (email_status, failure_reason, _utc_now_iso(), email_status, email_id),
                 )
             else:
                 email_cursor = conn.execute(

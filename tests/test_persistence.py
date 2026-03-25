@@ -176,6 +176,7 @@ class TestEmailExists:
         result = email_exists("101", "", user_id, db_path)
         assert result is not None
         assert result["status"] == "SUCCESS"
+        assert result["retry_count"] == 0
 
     def test_finds_by_message_id(self, tmp_path):
         db_path = _make_db(tmp_path)
@@ -184,6 +185,7 @@ class TestEmailExists:
         result = email_exists("UID_UNKNOWN", "<101@example.com>", user_id, db_path)
         assert result is not None
         assert result["status"] == "SUCCESS"
+        assert result["retry_count"] == 0
 
     def test_empty_message_id_does_not_match_other_nulls(self, tmp_path):
         db_path = _make_db(tmp_path)
@@ -204,6 +206,7 @@ class TestEmailExists:
         result = email_exists("101", "", user_id, db_path)
         assert result["status"] == "FAILURE_RETRYABLE"
         assert result["failure_reason"] == "CANDIDATE_LIST_EXHAUSTED"
+        assert result["retry_count"] == 0
 
 
 # ---------------------------------------------------------------------------
@@ -732,3 +735,138 @@ class TestRecordEmailResultUpsert:
             conn.close()
         assert row["status"] == "SUCCESS"
         assert row["failure_reason"] is None
+
+
+# ---------------------------------------------------------------------------
+# retry_count increment
+# ---------------------------------------------------------------------------
+
+
+class TestRetryCount:
+    """Tests for retry_count increment in record_email_result."""
+
+    _EMAIL = {
+        "uid": "777",
+        "message_id": "<777@example.com>",
+        "sender": "bank@example.com",
+        "subject": "Bill",
+    }
+
+    def test_first_retryable_record_has_retry_count_zero(self, tmp_path):
+        db_path = _make_db(tmp_path)
+        user_id = _seed_user(db_path)
+
+        _record_with_status(
+            user_id, self._EMAIL, db_path, "FAILURE_RETRYABLE",
+            failure_reason="CANDIDATE_LIST_EXHAUSTED",
+        )
+
+        result = email_exists("777", "<777@example.com>", user_id, db_path)
+        assert result["retry_count"] == 0
+
+    def test_second_retryable_record_increments_to_one(self, tmp_path):
+        db_path = _make_db(tmp_path)
+        user_id = _seed_user(db_path)
+
+        _record_with_status(
+            user_id, self._EMAIL, db_path, "FAILURE_RETRYABLE",
+            failure_reason="CANDIDATE_LIST_EXHAUSTED",
+        )
+        _record_with_status(
+            user_id, self._EMAIL, db_path, "FAILURE_RETRYABLE",
+            failure_reason="CANDIDATE_LIST_EXHAUSTED",
+        )
+
+        result = email_exists("777", "<777@example.com>", user_id, db_path)
+        assert result["retry_count"] == 1
+
+    def test_success_after_retryable_does_not_increment(self, tmp_path):
+        db_path = _make_db(tmp_path)
+        user_id = _seed_user(db_path)
+
+        _record_with_status(
+            user_id, self._EMAIL, db_path, "FAILURE_RETRYABLE",
+            failure_reason="CANDIDATE_LIST_EXHAUSTED",
+        )
+        _record_with_status(user_id, self._EMAIL, db_path, "SUCCESS")
+
+        result = email_exists("777", "<777@example.com>", user_id, db_path)
+        assert result["retry_count"] == 0
+
+    def test_terminal_after_retryable_does_not_increment(self, tmp_path):
+        db_path = _make_db(tmp_path)
+        user_id = _seed_user(db_path)
+
+        _record_with_status(
+            user_id, self._EMAIL, db_path, "FAILURE_RETRYABLE",
+            failure_reason="CANDIDATE_LIST_EXHAUSTED",
+        )
+        _record_with_status(
+            user_id, self._EMAIL, db_path, "FAILURE_TERMINAL",
+            failure_reason="MAX_RETRIES_EXCEEDED",
+        )
+
+        result = email_exists("777", "<777@example.com>", user_id, db_path)
+        assert result["retry_count"] == 0
+
+    def test_migration_adds_retry_count_to_existing_db(self, tmp_path):
+        db_path = str(tmp_path / "legacy.db")
+
+        # Create DB without retry_count column
+        conn = _get_connection(db_path)
+        try:
+            conn.execute("""
+                CREATE TABLE user (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    email TEXT NOT NULL UNIQUE,
+                    name TEXT NOT NULL,
+                    dob TEXT NOT NULL,
+                    mobile TEXT,
+                    pan TEXT,
+                    card_masked TEXT,
+                    account_masked TEXT,
+                    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE email (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL REFERENCES user(id),
+                    uid TEXT NOT NULL,
+                    message_id TEXT,
+                    sender TEXT,
+                    subject TEXT,
+                    received_at TEXT,
+                    status TEXT NOT NULL,
+                    failure_reason TEXT,
+                    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+                    processed_at TEXT,
+                    UNIQUE(uid, user_id),
+                    UNIQUE(message_id, user_id)
+                )
+            """)
+            conn.execute("""
+                INSERT INTO user (email, name, dob) VALUES ('a@b.com', 'Test', '1990-01-01')
+            """)
+            conn.execute("""
+                INSERT INTO email (user_id, uid, status) VALUES (1, 'pre-existing', 'SUCCESS')
+            """)
+            conn.commit()
+        finally:
+            conn.close()
+
+        # Run init_db — migration should add the column
+        init_db(db_path)
+
+        # Verify column exists and pre-existing row has DEFAULT 0
+        conn = _get_connection(db_path)
+        try:
+            cols = {row[1] for row in conn.execute("PRAGMA table_info(email)").fetchall()}
+            row = conn.execute(
+                "SELECT retry_count FROM email WHERE uid = 'pre-existing'"
+            ).fetchone()
+        finally:
+            conn.close()
+
+        assert "retry_count" in cols
+        assert row["retry_count"] == 0
