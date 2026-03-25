@@ -105,9 +105,7 @@ EMAIL_APP_PASSWORD=your-16-char-app-password
 EMAIL_MAILBOX=INBOX
 EMAIL_PROCESSED_LABEL=bill-processed
 EMAIL_CATEGORY=primary
-MAX_EMAILS_PER_RUN=50
-EMAIL_LOOKBACK_CAP_DAYS=365
-EMAIL_CHECKPOINT_PATH=data/email_fetch_checkpoint.txt
+EMAIL_LOOKBACK_CAP_DAYS=30
 ```
 
 See [Configuration](#configuration) for full details on each variable.
@@ -158,9 +156,7 @@ All configuration is provided via environment variables in the `.env` file.
 | `EMAIL_MAILBOX` | `INBOX` | Mailbox folder to scan |
 | `EMAIL_PROCESSED_LABEL` | `bill-processed` | Gmail label applied after processing |
 | `EMAIL_CATEGORY` | `primary` | Gmail category filter (`primary`, `updates`, etc.) |
-| `MAX_EMAILS_PER_RUN` | `50` | Maximum emails to process per invocation |
-| `EMAIL_LOOKBACK_CAP_DAYS` | `365` | How far back to search on first run |
-| `EMAIL_CHECKPOINT_PATH` | `data/email_fetch_checkpoint.txt` | Path to checkpoint file for incremental fetching |
+| `EMAIL_LOOKBACK_CAP_DAYS` | `30` | How far back to search on first run |
 
 ### Generating a Gmail App Password
 

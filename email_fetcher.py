@@ -26,7 +26,6 @@ logger = logging.getLogger(__name__)
 DEFAULT_MAILBOX = "INBOX"
 DEFAULT_PROCESSED_LABEL = "bill-processed"
 DEFAULT_CATEGORY = "primary"
-DEFAULT_MAX_EMAILS_PER_RUN = 50
 DEFAULT_LOOKBACK_CAP_DAYS = 30
 UNPROCESSED_SEARCH_TEMPLATE = 'after:{after_date} -label:{label} category:{category}'
 REQUIRED_KEYS = {
@@ -187,10 +186,6 @@ def _load_config() -> dict:
             DEFAULT_PROCESSED_LABEL,
         ),
         "category": os.getenv("EMAIL_CATEGORY", DEFAULT_CATEGORY),
-        "max_emails_per_run": _get_int_env(
-            "MAX_EMAILS_PER_RUN",
-            DEFAULT_MAX_EMAILS_PER_RUN,
-        ),
         "lookback_cap_days": _get_int_env(
             "EMAIL_LOOKBACK_CAP_DAYS",
             DEFAULT_LOOKBACK_CAP_DAYS,
